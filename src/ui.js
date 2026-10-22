@@ -490,6 +490,9 @@
 
     restoreDrafts(snapshot);
     enhanceDocRecall();
+    wireDocSelection();
+    const staleSelection = document.getElementById("selection-card-btn");
+    if (staleSelection) staleSelection.remove();
     restoreDocScroll();
     renderSidebar();
     renderStorage();
@@ -517,6 +520,89 @@
         button.textContent = shown ? "Hide answer" : "Show answer";
       });
       answers.insertAdjacentElement("afterend", button);
+    });
+  }
+
+  /**
+   * Select a sentence in a guide and turn it into a flashcard. This is how most
+   * people actually study a document: they find the sentence that matters.
+   */
+  function wireDocSelection() {
+    const body = els.view.querySelector("[data-doc-body]");
+    if (!body) return;
+    body.addEventListener("mouseup", () => showSelectionButton(body));
+    body.addEventListener("keyup", (event) => {
+      if (event.key === "Shift" || event.key.startsWith("Arrow")) showSelectionButton(body);
+    });
+  }
+
+  function showSelectionButton(body) {
+    const selection = typeof window.getSelection === "function" ? window.getSelection() : null;
+    const text = selection ? String(selection.toString() || "").trim() : "";
+    const existing = document.getElementById("selection-card-btn");
+    if (!text || text.length < 12 || text.length > 400) {
+      if (existing) existing.remove();
+      return;
+    }
+    let rect = null;
+    try {
+      const range = selection.getRangeAt(0).getBoundingClientRect();
+      if (range && (range.width || range.height)) rect = range;
+    } catch (error) {
+      rect = null;
+    }
+    const button = existing || document.createElement("button");
+    button.id = "selection-card-btn";
+    button.type = "button";
+    button.className = "selection-card-btn";
+    button.textContent = "Make a flashcard";
+    button.onclick = () => {
+      openSelectionCard(body.dataset.kitId, text);
+      button.remove();
+      if (selection && typeof selection.removeAllRanges === "function") selection.removeAllRanges();
+    };
+    if (!existing) document.body.appendChild(button);
+    if (rect) {
+      const top = Math.max(12, rect.top - 44) + (window.scrollY || 0);
+      button.style.top = `${top}px`;
+      button.style.left = `${Math.max(12, rect.left + rect.width / 2 - 70) + (window.scrollX || 0)}px`;
+    }
+  }
+
+  function openSelectionCard(kitId, text) {
+    const kit = kitId ? store.getKit(kitId) : null;
+    if (!kit) return;
+    openModal({
+      title: "Make a flashcard",
+      confirmLabel: "Add card",
+      body: `
+        <div class="field">
+          <label for="sel-front">Prompt</label>
+          <input id="sel-front" type="text" placeholder="What is the question this answers?">
+        </div>
+        <div class="field">
+          <label for="sel-back">Answer</label>
+          <textarea id="sel-back" rows="4">${esc(text)}</textarea>
+          <span class="hint">Taken from your study guide — edit it however you like.</span>
+        </div>`,
+      onConfirm: (root) => {
+        const front = root.querySelector("#sel-front").value.trim();
+        const back = root.querySelector("#sel-back").value.trim();
+        if (!front || !back) {
+          toast("A card needs both a prompt and an answer.", "error");
+          return false;
+        }
+        const current = kit.flashcards || { items: [] };
+        if (current.items && current.items.some((card) => card.front.toLowerCase() === front.toLowerCase())) {
+          toast("That prompt is already in the deck.", "error");
+          return false;
+        }
+        store.setKitFlashcards(kit.id, {
+          ...current,
+          items: [...(current.items || []), { front, back, source: "From the study guide" }],
+        });
+        toast("Card added to the deck.", "success");
+      },
     });
   }
 
@@ -1748,7 +1834,7 @@ Active transport is the movement of substances against a concentration gradient,
                 </nav>`
               : ""
           }
-          <article class="md" data-doc-body style="font-size:${readDocSize()}rem">${md.render(selected.document)}</article>
+          <article class="md" data-doc-body data-kit-id="${esc(kit.id)}" style="font-size:${readDocSize()}rem">${md.render(selected.document)}</article>
         </section>
       </div>`;
   }

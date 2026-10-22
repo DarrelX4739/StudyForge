@@ -915,6 +915,15 @@
     border-color:color-mix(in srgb,var(--accent) 35%,transparent);
   }
 
+  /* Select text in a guide → make a card */
+  .selection-card-btn{
+    position:absolute;z-index:45;padding:7px 12px;border-radius:9px;border:0;cursor:pointer;
+    background:var(--text);color:var(--bg);font:inherit;font-size:.78rem;font-weight:640;
+    box-shadow:var(--shadow-pop);
+  }
+  .selection-card-btn:hover{background:var(--accent);color:#fff}
+  @media print{ .selection-card-btn{display:none!important} }
+
   /* Activity calendar */
   .month-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;max-width:430px}
   .month-head{font-size:.66rem;font-weight:700;color:var(--muted);text-align:center;letter-spacing:.04em}
@@ -1378,14 +1387,14 @@
       done = true;
       console.warn("[StudyForge] " + reason + "; loading the project files directly.");
       [
-        "./src/store.js?v=2026-10-23d",
-        "./src/local.js?v=2026-10-23d",
-        "./src/markdown.js?v=2026-10-23d",
-        "./src/ocr.js?v=2026-10-23d",
-        "./src/ai.js?v=2026-10-23d",
-        "./src/jobs.js?v=2026-10-23d",
-        "./src/ui.js?v=2026-10-23d",
-        "./src/main.js?v=2026-10-23d",
+        "./src/store.js?v=2026-10-23e",
+        "./src/local.js?v=2026-10-23e",
+        "./src/markdown.js?v=2026-10-23e",
+        "./src/ocr.js?v=2026-10-23e",
+        "./src/ai.js?v=2026-10-23e",
+        "./src/jobs.js?v=2026-10-23e",
+        "./src/ui.js?v=2026-10-23e",
+        "./src/main.js?v=2026-10-23e",
       ].forEach(function (src) {
         var script = document.createElement("script");
         script.src = src;

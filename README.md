@@ -241,6 +241,8 @@ merged, de-duplicated by prompt and interleaved so the deck is not grouped by re
   `=`, or ` - ` works too).
 - **Notes autosave** as you type, and a gentle backup nudge after two weeks — everything lives in
   this browser, so the library can be saved to a JSON file in one click.
+- **Select a sentence** in the guide and turn it straight into a flashcard — the answer is pre-filled,
+  so you only name the prompt.
 - **Quick-recall answers** in the guide start hidden behind a Show answer button, so the section works
   as a self-test (they are all printed when you print the guide).
 - **Offline chip** in the top bar: StudyForge keeps working with no connection, and the header says so.
@@ -446,7 +448,7 @@ npm test
 | `local-engine` | The on-device generator on its own (plain node): guide sections, card quality, four-option questions, seeds and refusals. |
 | `insights` | Progress analytics across attempts, trouble spots, per-question pace, hardest cards, card editing, the review schedule and exam resume. |
 
-All eight suites pass — 291 checks, zero console errors.
+All eight suites pass — 295 checks, zero console errors.
 
 ## Limitations
 

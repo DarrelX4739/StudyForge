@@ -523,6 +523,40 @@ const modal = () => window.document.getElementById("modal-root");
     check("the button switches to Hide", revealBtn.textContent === "Hide answer");
   }
 
+  // ---------- select text → make a card ----------
+  window.location.hash = `#/kit/${kit.id}/documents`;
+  await wait(180);
+  const selectableDoc = view().querySelector("[data-doc-body]");
+  const paragraph =
+    selectableDoc &&
+    [...selectableDoc.querySelectorAll("p")].sort((a, b) => b.textContent.length - a.textContent.length)[0];
+  check("guide body is present for selection", Boolean(paragraph));
+  if (paragraph) {
+    const range = window.document.createRange();
+    range.selectNodeContents(paragraph);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    paragraph.dispatchEvent(new window.MouseEvent("mouseup", { bubbles: true }));
+    await wait(120);
+    const makeCardBtn = window.document.getElementById("selection-card-btn");
+    check("selecting guide text offers a flashcard", Boolean(makeCardBtn));
+    if (makeCardBtn) {
+      const before = store.getKit(kit.id).flashcards.items.length;
+      makeCardBtn.click();
+      await wait(160);
+      const back = window.document.querySelector("#modal-root #sel-back");
+      check("the selection is pre-filled as the answer", Boolean(back && back.value.length > 10));
+      window.document.querySelector("#modal-root #sel-front").value = "What did the guide just say?";
+      window.document.querySelector("#modal-root [data-confirm]").click();
+      await wait(200);
+      check(
+        "the card from the guide is added",
+        store.getKit(kit.id).flashcards.items.length === before + 1,
+      );
+    }
+  }
+
   // ---------- find in guide ----------
   window.location.hash = `#/kit/${kit.id}/documents`;
   await wait(150);
