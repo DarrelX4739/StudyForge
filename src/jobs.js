@@ -599,6 +599,7 @@
           count: quota,
           style: job.difficulty === "exam" ? "exam" : "",
           sourceName: resource.name,
+          seed: job.seed || 0,
         }),
       { step: (entry, index, total) => `Writing questions from “${entry.name}” (${index + 1}/${total})…` },
     );
@@ -640,7 +641,7 @@
       job,
       target,
       (resource, quota) =>
-        local.buildFlashcards({ text: resource.document, count: quota, style }).map((card) => ({
+        local.buildFlashcards({ text: resource.document, count: quota, style, seed: job.seed || 0 }).map((card) => ({
           ...card,
           source: resource.name,
         })),
@@ -679,7 +680,7 @@
     const { kit, ready, groups, coverage, failures } = await localAcrossResources(
       job,
       target,
-      (resource, quota) => local.buildExam({ text: resource.document, count: quota }),
+      (resource, quota) => local.buildExam({ text: resource.document, count: quota, seed: job.seed || 0 }),
       { step: (entry, index, total) => `Writing exam questions from “${entry.name}” (${index + 1}/${total})…` },
     );
 
@@ -896,6 +897,7 @@
   function makeQuiz(kit, count, difficulty = "") {
     return enqueue({
       kind: "quiz",
+      seed: Date.now() % 100000,
       kitId: kit.id,
       count,
       difficulty,
@@ -906,6 +908,7 @@
   function makeFlashcards(kit, count, style) {
     return enqueue({
       kind: "flashcards",
+      seed: Date.now() % 100000,
       kitId: kit.id,
       count,
       style,
@@ -916,6 +919,7 @@
   function makeExam(kit, count, durationMinutes) {
     return enqueue({
       kind: "exam",
+      seed: Date.now() % 100000,
       kitId: kit.id,
       count,
       durationMinutes,

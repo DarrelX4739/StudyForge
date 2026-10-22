@@ -127,6 +127,13 @@
 
   const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
+  /** Rotate a list so regenerating with a new seed starts somewhere else. */
+  function rotate(list, seed) {
+    if (!list.length || !seed) return list;
+    const offset = Math.abs(Math.floor(seed)) % list.length;
+    return list.slice(offset).concat(list.slice(0, offset));
+  }
+
   /* ------------------------------------------------------------------ *
    * Is there enough to work with?
    * ------------------------------------------------------------------ */
@@ -435,13 +442,13 @@
    * Flashcards
    * ------------------------------------------------------------------ */
 
-  function buildFlashcards({ text = "", count = 20, style = "vocab" } = {}) {
+  function buildFlashcards({ text = "", count = 20, style = "vocab", seed = 0 } = {}) {
     if (!hasUsableText(text)) {
       throw new Error("Add a little more text before generating flashcards.");
     }
     const total = clamp(Math.floor(count) || 20, 1, 60);
     const definitions = extractDefinitions(text);
-    const cloze = buildClozeItems(text, total);
+    const cloze = rotate(buildClozeItems(text, total), seed);
     const cards = [];
     const seen = new Set();
 
@@ -506,14 +513,16 @@
    * Questions
    * ------------------------------------------------------------------ */
 
-  function buildQuestions({ text = "", count = 10, style = "", sourceName = "" } = {}) {
+  function buildQuestions({ text = "", count = 10, style = "", sourceName = "", seed = 0 } = {}) {
     if (!hasUsableText(text)) {
       throw new Error("Add a little more text before generating questions.");
     }
     const total = clamp(Math.floor(count) || 10, 1, 30);
     const examOnly = style === "exam";
     const definitions = extractDefinitions(text);
-    const cloze = buildClozeItems(text, total * 3);
+    // A new seed rotates the source material, so "New questions" gives a
+    // different set instead of the same one again.
+    const cloze = rotate(buildClozeItems(text, total * 3), seed);
     const questions = [];
     const seen = new Set();
 
@@ -606,12 +615,12 @@
         if (questions.length >= mcqTarget) break;
         const wrong = seededShuffle(
           definitions.filter((other) => other.term !== entry.term),
-          hash(entry.term) + 7,
+          hash(entry.term) + 7 + Number(seed || 0),
         ).slice(0, 3);
         if (wrong.length < 2) continue;
         const options = seededShuffle(
           [entry.definition, ...wrong.map((other) => other.definition)],
-          hash(entry.definition),
+          hash(entry.definition) + Number(seed || 0),
         );
         addQuestion({
           type: "mcq",
@@ -705,8 +714,8 @@
     return mixed.slice(0, total);
   }
 
-  function buildExam({ text = "", count = 15 } = {}) {
-    return buildQuestions({ text, count, style: "exam" });
+  function buildExam({ text = "", count = 15, seed = 0 } = {}) {
+    return buildQuestions({ text, count, style: "exam", seed });
   }
 
   /* ------------------------------------------------------------------ *
