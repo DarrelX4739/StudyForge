@@ -173,6 +173,46 @@ async function playQuiz({ pick = 0 } = {}) {
     );
   }
 
+  // ---------- resume an exam ----------
+  window.location.hash = `#/kit/${kit.id}/exam`;
+  await wait(160);
+  let startExamBtn = view().querySelector('[data-action="start-exam"]');
+  if (!startExamBtn) {
+    const makeExam = view().querySelector('[data-action="make-exam"]');
+    if (makeExam) {
+      makeExam.click();
+      await wait(200);
+      const confirm = window.document.querySelector("#modal-root [data-confirm]");
+      if (confirm) confirm.click();
+      await wait(1200);
+      startExamBtn = view().querySelector('[data-action="start-exam"]');
+    }
+  }
+  check("practice test can be started", Boolean(startExamBtn));
+  if (startExamBtn) {
+    startExamBtn.click();
+    await wait(200);
+    const opt = view().querySelector('[data-action="exam-answer"]');
+    check("exam renders answers", Boolean(opt));
+    opt.click();
+    await wait(150);
+    check("exam answer stored as a draft", Boolean(window.localStorage.getItem("studyforge.exam.v1")));
+    window.location.hash = "#/";
+    await wait(150);
+    window.location.hash = `#/kit/${kit.id}/exam`;
+    await wait(200);
+    check("the exam is still running after leaving the page", Boolean(view().querySelector(".exam-clock")));
+    check("the ticked answer is kept", Boolean(view().querySelector(".option.selected")));
+    view().querySelector('[data-action="submit-exam"]').click();
+    await wait(150);
+    const submitConfirm = window.document.querySelector("#modal-root [data-confirm]");
+    if (submitConfirm) submitConfirm.click();
+    await wait(300);
+    check("submitting clears the exam draft", !window.localStorage.getItem("studyforge.exam.v1"));
+    const sittings = (store.getKit(kit.id).exam.attempts || []).length;
+    check("the sitting is saved", sittings >= 1, `${sittings} sitting(s)`);
+  }
+
   // ---------- week strip ----------
   window.location.hash = "#/";
   await wait(150);

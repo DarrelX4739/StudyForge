@@ -290,6 +290,47 @@
     toast("Picked up where you left off.");
   }
 
+  /* The timed exam is kept the same way, because losing a paper to a reload is
+     a horrible way to learn that a clock was running. */
+  const EXAM_KEY = "studyforge.exam.v1";
+
+  function saveExamDraft() {
+    if (examState.status !== "running" || !examState.kitId) return;
+    try {
+      localStorage.setItem(
+        EXAM_KEY,
+        JSON.stringify({
+          kitId: examState.kitId,
+          answers: examState.answers,
+          startedAt: examState.startedAt,
+          endsAt: examState.endsAt,
+        }),
+      );
+    } catch (error) {
+      /* storage is optional here */
+    }
+  }
+
+  function readExamDraft(kitId) {
+    try {
+      const raw = localStorage.getItem(EXAM_KEY);
+      if (!raw) return null;
+      const draft = JSON.parse(raw);
+      if (!draft || draft.kitId !== kitId) return null;
+      return draft;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function clearExamDraft() {
+    try {
+      localStorage.removeItem(EXAM_KEY);
+    } catch (error) {
+      /* ignore */
+    }
+  }
+
   /** Deck order: natural, or a stable shuffle stored in flashState.order. */
   function deckOrder(kit) {
     const total = kit.flashcards ? kit.flashcards.items.length : 0;
@@ -2202,12 +2243,36 @@ Active transport is the movement of substances against a concentration gradient,
           const average = Math.round(percents.reduce((sum, value) => sum + value, 0) / percents.length);
           return `<p class="muted tiny">Across ${plural(sittings.length, "sitting")}: best ${best}% · average ${average}%.</p>`;
         })()}
+        ${renderExamDraftBanner(kit)}
         <div class="notice subtle">
           The clock keeps running if you leave this tab, and the exam submits itself when time is up.
+          Your answers are saved as you go, so a reload will not lose the paper.
           Only multiple-choice questions are used so the paper can be marked automatically.
         </div>
       </section>
       ${renderExamAttempts(kit)}`;
+  }
+
+  function renderExamDraftBanner(kit) {
+    const draft = readExamDraft(kit.id);
+    if (!draft) return "";
+    const left = Math.max(0, Math.round((draft.endsAt - Date.now()) / 1000));
+    const answered = Object.keys(draft.answers || {}).length;
+    return `
+      <div class="quiz-draft" role="status">
+        <div class="quiz-draft-text">
+          <strong>${left ? "You have an exam in progress" : "An unfinished exam ran out of time"}</strong>
+          <span class="muted small">${
+            left
+              ? `${formatClock(left)} left · ${answered} of ${kit.exam.items.length} answered`
+              : `${answered} of ${kit.exam.items.length} answered — resuming submits it straight away`
+          }</span>
+        </div>
+        <div class="quiz-draft-actions">
+          <button class="btn small primary" data-action="resume-exam">Resume</button>
+          <button class="btn small ghost" data-action="discard-exam">Discard</button>
+        </div>
+      </div>`;
   }
 
   /** Saved exam sittings, each of which can be reviewed question by question. */
@@ -3626,12 +3691,14 @@ Active transport is the movement of substances against a concentration gradient,
       secondsUsed: 0,
       result: null,
     };
+    saveExamDraft();
     render();
     toast(`Exam started — ${kit.exam.durationMinutes} minutes on the clock.`);
   }
 
   function submitExam(reason = "manual") {
     if (examState.status !== "running") return;
+    clearExamDraft();
     const kit = store.getKit(examState.kitId);
     if (!kit || !kit.exam) {
       resetExam(examState.kitId);
@@ -4615,7 +4682,34 @@ Active transport is the movement of substances against a concentration gradient,
       case "exam-answer": {
         if (examState.status !== "running") break;
         examState.answers[Number(actionEl.dataset.q)] = Number(actionEl.dataset.opt);
+        saveExamDraft();
         render();
+        break;
+      }
+      case "resume-exam": {
+        const kit = store.getKit(route.id) || store.getKit(examState.kitId);
+        const draft = kit && readExamDraft(kit.id);
+        if (!kit || !draft) {
+          toast("That exam could not be restored.", "error");
+          break;
+        }
+        examState = {
+          kitId: kit.id,
+          status: "running",
+          answers: draft.answers || {},
+          startedAt: draft.startedAt || Date.now(),
+          endsAt: draft.endsAt || Date.now(),
+          secondsUsed: 0,
+          result: null,
+        };
+        render();
+        if (Date.now() >= examState.endsAt) submitExam("timeout");
+        break;
+      }
+      case "discard-exam": {
+        clearExamDraft();
+        render();
+        toast("Unfinished exam discarded.");
         break;
       }
       case "submit-exam": {

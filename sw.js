@@ -7,7 +7,7 @@
  *   • Never touch API calls (different origins, or /api) — they must go straight
  *     to the network.
  */
-const CACHE = "studyforge-v2026-10-22k";
+const CACHE = "studyforge-v2026-10-22l";
 const SHELL = [
   "./",
   "./index.html",

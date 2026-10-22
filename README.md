@@ -230,6 +230,8 @@ merged, de-duplicated by prompt and interleaved so the deck is not grouped by re
 - **Notes autosave** as you type, and a gentle backup nudge after two weeks — everything lives in
   this browser, so the library can be saved to a JSON file in one click.
 - **Undo** on every delete — the toast puts the kit, class or attempt straight back.
+- **Practice tests autosave**: ticked answers survive a reload, and the clock keeps its remaining
+  time, so a stray refresh never voids a paper.
 - **Resume a quiz**: an unfinished run is kept on your device, so closing the tab or reloading
   never loses marked answers — the quiz page offers Resume or Discard.
 - **Two deck styles**, set under **Settings → Flashcards**:
@@ -419,12 +421,12 @@ npm test
 | --- | --- |
 | `local-flow` | The whole on-device pipeline: paste text → guide → quiz → cards → exam, plus a full quiz play-through. |
 | `crud` | Creating classes and kits, generating from pasted notes, running an exam, backup export/import, deletion. |
-| `polish` | Every route, answer locking, attempt persistence and review, card scheduling, streaks, shortcuts. |
+| `polish` | Every route, answer locking, attempt persistence and review, card scheduling, streaks, shortcuts, quiz resume, printing, paste-cards, undo. |
 | `settings` | Provider switching, per-provider keys, search, theme, sidebar. |
 | `ui-provider` | Provider picker, stubbed Gemini/OpenRouter/custom requests, sample kit, missed-question retry, review mode. |
-| `insights` | Progress analytics across attempts, trouble spots, per-question pace, hardest cards and the review schedule. |
+| `insights` | Progress analytics across attempts, trouble spots, per-question pace, hardest cards, card editing, the review schedule and exam resume. |
 
-All six suites pass with zero console errors.
+All six suites pass — 203 checks, zero console errors.
 
 ## Limitations
 
