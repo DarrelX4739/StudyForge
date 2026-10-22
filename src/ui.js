@@ -1444,6 +1444,8 @@ Active transport is the movement of substances against a concentration gradient,
                     }</span>
                   </span>
                   <span class="attempt-bar"><span style="width:${attempt.percent}%"></span></span>
+                  <button class="btn ghost small" data-action="review-attempt" data-id="${esc(attempt.id)}"
+                    data-kit="${esc(kit.id)}">Review</button>
                   <a class="btn ghost small" href="#/kit/${esc(kit.id)}/questions">Open kit</a>
                 </li>`,
                 )
@@ -5710,7 +5712,10 @@ Active transport is the movement of substances against a concentration gradient,
         break;
       }
       case "review-attempt": {
-        const kitId = quizState.kitId || (route.name === "kit" ? route.id : null);
+        const kitId =
+          (actionEl && actionEl.dataset && actionEl.dataset.kit) ||
+          quizState.kitId ||
+          (route.name === "kit" ? route.id : null);
         const kit = kitId ? store.getKit(kitId) : null;
         const attempt = kit && kit.quiz && (kit.quiz.attempts || []).find((item) => item.id === id);
         if (!attempt) break;

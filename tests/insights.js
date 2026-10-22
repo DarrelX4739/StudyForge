@@ -245,6 +245,15 @@ async function playQuiz({ pick = 0 } = {}) {
     "activity page counts the streak",
     /streak/i.test(view().textContent) && Boolean(view().querySelector(".stat-strip")),
   );
+  const reviewFirst = view().querySelector(".attempt-list [data-action=\"review-attempt\"]");
+  check("an attempt can be reviewed from the activity page", Boolean(reviewFirst));
+  if (reviewFirst) {
+    reviewFirst.click();
+    await wait(200);
+    check("attempt review opens", Boolean(window.document.querySelector("#modal-root").textContent.trim().length > 40));
+    window.document.querySelector("#modal-root [data-confirm]").click();
+    await wait(150);
+  }
   const exportBtn = view().querySelector('[data-action="download-attempts"]');
   check("activity page can export attempts", Boolean(exportBtn));
   if (exportBtn) {
