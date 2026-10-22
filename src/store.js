@@ -46,6 +46,8 @@
       classes: [],
       kits: [],
       resources: [],
+      // Daily activity for the streak. { "2026-10-22": { cards: 3, quizzes: 1 } }
+      activity: {},
       settings: {
         provider: DEFAULT_PROVIDER,
         // One key per provider, so switching back and forth never loses one.
@@ -84,6 +86,18 @@
         name: str(item.name, "Untitled class"),
         createdAt: str(item.createdAt, now()),
       }));
+
+    // Daily activity, used for the streak and the heat strip.
+    if (raw.activity && typeof raw.activity === "object") {
+      for (const [key, entry] of Object.entries(raw.activity)) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || !entry || typeof entry !== "object") continue;
+        const clean = {};
+        for (const [kind, value] of Object.entries(entry)) {
+          if (Number.isFinite(value) && value > 0) clean[kind] = Math.round(value);
+        }
+        if (Object.keys(clean).length) next.activity[key] = clean;
+      }
+    }
 
     const classIds = new Set(next.classes.map((c) => c.id));
     next.kits = arr(raw.kits)
@@ -211,6 +225,29 @@
     };
   }
 
+  /** One card's saved progress: when it is next worth reviewing. */
+  function normaliseRating(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    const state = raw.state === "known" ? "known" : raw.state === "again" ? "again" : "";
+    if (!state) return null;
+    return {
+      state,
+      reps: Number.isFinite(raw.reps) ? Math.max(0, raw.reps) : 0,
+      at: str(raw.at, now()),
+      dueAt: str(raw.dueAt, now()),
+    };
+  }
+
+  function normaliseRatings(raw) {
+    const out = {};
+    if (!raw || typeof raw !== "object") return out;
+    for (const [key, value] of Object.entries(raw)) {
+      const rating = normaliseRating(value);
+      if (rating) out[key] = rating;
+    }
+    return out;
+  }
+
   function normaliseFlashcards(raw) {
     if (!raw || typeof raw !== "object") return null;
     const items = arr(raw.items)
@@ -229,6 +266,8 @@
       // a regeneration can default to the same style.
       style: FLASHCARD_STYLES.includes(raw.style) ? raw.style : DEFAULT_FLASHCARD_STYLE,
       engine: raw.engine === "local" ? "local" : "ai",
+      // Card progress, keyed by the card's prompt so it survives regeneration.
+      ratings: normaliseRatings(raw.ratings),
       sourceCount: Number.isFinite(raw.sourceCount) ? raw.sourceCount : 0,
       sourceNames: normaliseSources(raw.sourceNames),
       coverage: normaliseCoverage(raw.coverage),
@@ -262,6 +301,8 @@
       items: choices,
       durationMinutes: Number.isFinite(minutes) ? Math.min(180, Math.max(1, Math.round(minutes))) : 15,
       engine: raw.engine === "local" ? "local" : "ai",
+      // Card progress, keyed by the card's prompt so it survives regeneration.
+      ratings: normaliseRatings(raw.ratings),
       sourceCount: Number.isFinite(raw.sourceCount) ? raw.sourceCount : 0,
       sourceNames: normaliseSources(raw.sourceNames),
       coverage: normaliseCoverage(raw.coverage),
@@ -466,6 +507,76 @@
     return true;
   }
 
+  function dayKey(date = new Date()) {
+    const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 10);
+  }
+
+  /** Count a study action against today, so the streak and heatmap stay real. */
+  function recordActivity(kind = "study", amount = 1) {
+    if (!state.activity || typeof state.activity !== "object") state.activity = {};
+    const key = dayKey();
+    const today = state.activity[key] || { cards: 0, quizzes: 0, guides: 0 };
+    if (Object.prototype.hasOwnProperty.call(today, kind)) today[kind] += amount;
+    else today[kind] = amount;
+    state.activity[key] = today;
+    // Keep a year of history at most.
+    const keys = Object.keys(state.activity).sort();
+    for (const old of keys.slice(0, Math.max(0, keys.length - 400))) delete state.activity[old];
+    return today;
+  }
+
+  /**
+   * Current streak = consecutive days with any activity, counting back from
+   * today (or yesterday, so the streak does not vanish before you study).
+   */
+  function streakInfo() {
+    const activity = state.activity || {};
+    const studied = (key) => {
+      const entry = activity[key];
+      if (!entry) return false;
+      return Object.values(entry).some((value) => Number(value) > 0);
+    };
+    const today = new Date();
+    let cursor = new Date(today.getTime());
+    if (!studied(dayKey(cursor))) cursor.setDate(cursor.getDate() - 1);
+    let current = 0;
+    while (studied(dayKey(cursor))) {
+      current += 1;
+      cursor.setDate(cursor.getDate() - 1);
+    }
+    const dates = Object.keys(activity).filter(studied).sort();
+    let best = 0;
+    let run = 0;
+    let previous = null;
+    for (const date of dates) {
+      if (previous) {
+        const gap = Math.round((new Date(date) - new Date(previous)) / 86400000);
+        run = gap === 1 ? run + 1 : 1;
+      } else {
+        run = 1;
+      }
+      best = Math.max(best, run);
+      previous = date;
+    }
+    return { current, best: Math.max(best, current), days: studied(dayKey(today)), dates };
+  }
+
+  /** The last `count` days, oldest first, for the activity heat strip. */
+  function activityDays(count = 14) {
+    const out = [];
+    const activity = state.activity || {};
+    for (let offset = count - 1; offset >= 0; offset -= 1) {
+      const date = new Date();
+      date.setDate(date.getDate() - offset);
+      const key = dayKey(date);
+      const entry = activity[key] || {};
+      const total = Object.values(entry).reduce((sum, value) => sum + (Number(value) || 0), 0);
+      out.push({ date: key, total, level: total === 0 ? 0 : total < 4 ? 1 : total < 10 ? 2 : 3 });
+    }
+    return out;
+  }
+
   function touchKit(kitId) {
     const kit = getKit(kitId);
     if (kit) kit.updatedAt = now();
@@ -514,6 +625,7 @@
     resource.documentUpdatedAt = now();
     resource.updatedAt = now();
     touchKit(resource.kitId);
+    if (resource.document) recordActivity("guides");
     commit();
     return resource;
   }
@@ -556,6 +668,7 @@
     kit.quiz.attempts = [next, ...arr(kit.quiz.attempts)].slice(0, MAX_QUIZ_ATTEMPTS);
     kit.updatedAt = now();
     touchKit(kitId);
+    recordActivity("quizzes");
     commit();
     return next;
   }
@@ -566,6 +679,41 @@
     const before = arr(kit.quiz.attempts).length;
     kit.quiz.attempts = arr(kit.quiz.attempts).filter((attempt) => attempt.id !== attemptId);
     if (kit.quiz.attempts.length === before) return false;
+    touchKit(kitId);
+    commit();
+    return true;
+  }
+
+  /**
+   * Record how a card went and schedule the next review.
+   * "Got it" spaces reviews out (3 days, then further apart, capped at 30);
+   * "Still learning" brings it back in ten minutes.
+   */
+  function rateCard(kitId, cardKey, state) {
+    const kit = getKit(kitId);
+    if (!kit || !kit.flashcards || !cardKey) return null;
+    const key = String(cardKey).toLowerCase().trim();
+    const previous = kit.flashcards.ratings[key] || { reps: 0 };
+    const reps = state === "known" ? Math.min(6, (previous.reps || 0) + 1) : 0;
+    const dueInMs =
+      state === "known" ? Math.min(30, reps * 3) * 24 * 60 * 60 * 1000 : 10 * 60 * 1000;
+    const rating = {
+      state: state === "known" ? "known" : "again",
+      reps,
+      at: now(),
+      dueAt: new Date(Date.now() + dueInMs).toISOString(),
+    };
+    kit.flashcards.ratings[key] = rating;
+    touchKit(kitId);
+    recordActivity("cards");
+    commit();
+    return rating;
+  }
+
+  function resetCardRatings(kitId) {
+    const kit = getKit(kitId);
+    if (!kit || !kit.flashcards) return false;
+    kit.flashcards.ratings = {};
     touchKit(kitId);
     commit();
     return true;
@@ -745,6 +893,12 @@
     addKitQuizAttempt,
     deleteKitQuizAttempt,
     setKitFlashcards,
+    rateCard,
+    resetCardRatings,
+    recordActivity,
+    streakInfo,
+    activityDays,
+    dayKey,
     setKitExam,
     setKitExamAttempt,
     deleteResource,

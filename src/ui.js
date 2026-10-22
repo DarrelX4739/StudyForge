@@ -36,6 +36,9 @@
   let query = "";
   let editingDocId = null;
   let docViewId = null;
+  // Set by the browser when the app is installable; consumed by Settings.
+  let installPrompt = null;
+
   // Quiz run. One question at a time: the answer is locked and marked the
   // moment "Next" is pressed, and everything is saved when the quiz is
   // submitted at the end.
@@ -81,6 +84,7 @@
     settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 1 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 15a2 2 0 1 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 4a2 2 0 1 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.7 1.7 0 0 0 21 11a2 2 0 1 1 0 4Z"/>',
     moon: '<path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/>',
     chevron: '<path d="M9 6l6 6-6 6"/>',
+    keyboard: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/>',
     arrowLeft: '<path d="M15 5l-7 7 7 7"/>',
     arrowRight: '<path d="M9 5l7 7-7 7"/>',
     quiz: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.4 2.3c-.6.2-1 .8-1 1.4v.3"/><path d="M12 16.8h.01"/>',
@@ -163,6 +167,7 @@
       shuffled: false,
       showList: false,
       reviewMode: false,
+      dueOnly: false,
     };
   }
 
@@ -188,12 +193,19 @@
     const total = kit.flashcards ? kit.flashcards.items.length : 0;
     if (!total) return [];
     if (flashState.reviewMode) {
-      const again = Object.keys(flashState.again)
-        .map(Number)
-        .filter((index) => index >= 0 && index < total)
-        .sort((a, b) => a - b);
-      if (again.length) return again;
+      const now = Date.now();
+      const ratings = (kit.flashcards && kit.flashcards.ratings) || {};
+      const inMode = kit.flashcards.items
+        .map((card, index) => ({ card, index }))
+        .filter(({ card }) => {
+          const rating = ratings[cardKey(card)];
+          if (flashState.dueOnly) return !rating || new Date(rating.dueAt).getTime() <= now;
+          return rating && rating.state === "again";
+        })
+        .map(({ index }) => index);
+      if (inMode.length) return inMode;
       flashState.reviewMode = false;
+      flashState.dueOnly = false;
     }
     if (!flashState.order || flashState.order.length !== total) {
       flashState.order = Array.from({ length: total }, (_, index) => index);
@@ -445,6 +457,10 @@
       </div>
       <div class="nav-group">
         <div class="nav-label">Data</div>
+        <button class="nav-item" data-action="show-shortcuts" title="Keyboard shortcuts">
+          <span class="nav-icon">${icon("keyboard")}</span>
+          <span class="nav-text">Shortcuts</span>
+        </button>
         <button class="nav-item" data-action="export-backup" title="Export a backup">
           <span class="nav-icon">${icon("download")}</span>
           <span class="nav-text">Export backup</span>
@@ -570,7 +586,11 @@ Active transport is the movement of substances against a concentration gradient,
       if (kit.name.toLowerCase().includes(needle)) return true;
       if (kit.subject.toLowerCase().includes(needle)) return true;
       return state.resources.some(
-        (resource) => resource.kitId === kit.id && resource.name.toLowerCase().includes(needle),
+        (resource) =>
+          resource.kitId === kit.id &&
+          (resource.name.toLowerCase().includes(needle) ||
+            // Search inside generated guides too, not just titles.
+            (resource.document && resource.document.toLowerCase().includes(needle))),
       );
     };
 
@@ -608,6 +628,8 @@ Active transport is the movement of substances against a concentration gradient,
       </header>
       <p class="page-sub">Turn your PDFs and notes into study guides, flashcards, quizzes and practice tests — every attempt is saved so you can watch yourself improve.</p>
       ${state.kits.length === 0 ? renderEmptyDashboard() : ""}
+      ${renderStreakStrip(state)}
+      ${renderContinueCard(state)}
       ${
         state.kits.length
           ? `<div class="stat-strip">
@@ -658,6 +680,75 @@ Active transport is the movement of substances against a concentration gradient,
         }
       </div>`;
     return page;
+  }
+
+  /** Streak + a two-week heat strip, so momentum is visible at a glance. */
+  function renderStreakStrip(state) {
+    if (!state.kits.length || query) return "";
+    const streak = store.streakInfo();
+    const days = store.activityDays(14);
+    const hasAny = days.some((day) => day.total > 0);
+    if (!streak.current && !hasAny) {
+      return `
+        <section class="streak-strip quiet">
+          <span class="streak-flame">🔥</span>
+          <div class="streak-copy">
+            <strong>Start a streak today</strong>
+            <span class="muted tiny">Rate a flashcard or finish a quiz and your streak begins.</span>
+          </div>
+        </section>`;
+    }
+    return `
+      <section class="streak-strip">
+        <span class="streak-flame">${streak.days ? "🔥" : "🌱"}</span>
+        <div class="streak-copy">
+          <strong>${streak.current} day${streak.current === 1 ? "" : "s"} in a row</strong>
+          <span class="muted tiny">${
+            streak.days
+              ? "Today counts. Keep it going."
+              : "Study today to keep the streak alive."
+          }${streak.best > streak.current ? ` · best ${streak.best}` : ""}</span>
+        </div>
+        <div class="heat-strip" role="img" aria-label="Study activity over the last 14 days">
+          ${days
+            .map(
+              (day) =>
+                `<span class="heat-cell level-${day.level}" title="${esc(day.date)} · ${
+                  day.total ? `${day.total} actions` : "no activity"
+                }"></span>`,
+            )
+            .join("")}
+        </div>
+      </section>`;
+  }
+
+  /** One-click way back into whatever was studied most recently. */
+  function renderContinueCard(state) {
+    if (!state.kits.length || query || filterClassId) return "";
+    const recent = [...state.kits].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0];
+    if (!recent) return "";
+    const hasQuiz = Boolean(recent.quiz);
+    const hasCards = Boolean(recent.flashcards);
+    const hasGuide = store.resourcesInKit(recent.id).some((resource) => resource.document);
+    if (!hasQuiz && !hasCards && !hasGuide) return "";
+    const attempt = recent.quiz && recent.quiz.attempts && recent.quiz.attempts[0];
+    return `
+      <section class="continue-card">
+        <div class="continue-main">
+          <span class="pill accent">Pick up where you left off</span>
+          <h3>${esc(recent.name)}</h3>
+          <p class="muted tiny">
+            Updated ${esc(relativeTime(recent.updatedAt))}${
+              attempt ? ` · last quiz ${attempt.percent}%` : ""
+            }${recent.subject ? ` · ${esc(recent.subject)}` : ""}
+          </p>
+        </div>
+        <div class="row tight">
+          ${hasGuide ? `<a class="btn small" href="#/kit/${esc(recent.id)}/documents">Study guide</a>` : ""}
+          ${hasCards ? `<a class="btn small" href="#/kit/${esc(recent.id)}/flashcards">Flashcards</a>` : ""}
+          ${hasQuiz ? `<a class="btn small primary" href="#/kit/${esc(recent.id)}/questions">Quiz</a>` : ""}
+        </div>
+      </section>`;
   }
 
   function renderEmptyDashboard() {
@@ -865,6 +956,7 @@ Active transport is the movement of substances against a concentration gradient,
             <h2>${esc(selected.name)}</h2>
             <div class="row tight">
               <a class="btn small" href="#/resource/${esc(selected.id)}">Open resource</a>
+              <button class="btn small" data-action="print-doc" data-id="${esc(selected.id)}">Print</button>
               <button class="btn small" data-action="copy-doc" data-id="${esc(selected.id)}">Copy</button>
               <button class="btn small" data-action="download-doc" data-id="${esc(selected.id)}">Download .md</button>
             </div>
@@ -1015,6 +1107,7 @@ Active transport is the movement of substances against a concentration gradient,
                         }</span>
                       </span>
                       <span class="attempt-bar"><span style="width:${attempt.percent}%"></span></span>
+                      <button class="btn ghost small" data-action="review-attempt" data-id="${esc(attempt.id)}">Review</button>
                       <button class="icon-btn danger" title="Delete this attempt" data-action="delete-quiz-attempt"
                         data-id="${esc(attempt.id)}">×</button>
                     </li>`,
@@ -1311,6 +1404,33 @@ Active transport is the movement of substances against a concentration gradient,
     return `<p class="muted small">No flashcards yet. Generate a deck and it will be saved with this study kit.</p>`;
   }
 
+  /** Stable progress key for a card: its prompt text, so regeneration keeps it. */
+  function cardKey(card) {
+    return String(card.front || "").toLowerCase().replace(/\s+/g, " ").trim();
+  }
+
+  /** Progress for the current deck, derived from the saved ratings. */
+  function deckProgress(kit) {
+    const ratings = (kit.flashcards && kit.flashcards.ratings) || {};
+    const now = Date.now();
+    let known = 0;
+    let again = 0;
+    let due = 0;
+    let unseen = 0;
+    for (const card of kit.flashcards.items) {
+      const rating = ratings[cardKey(card)];
+      if (!rating) {
+        unseen += 1;
+        due += 1;
+        continue;
+      }
+      if (rating.state === "known") known += 1;
+      else again += 1;
+      if (new Date(rating.dueAt).getTime() <= now) due += 1;
+    }
+    return { known, again, due, unseen };
+  }
+
   function renderDeck(kit) {
     const items = kit.flashcards.items;
     const order = deckOrder(kit);
@@ -1321,8 +1441,9 @@ Active transport is the movement of substances against a concentration gradient,
     const vocab = kit.flashcards.style !== "question";
     const frontLabel = vocab ? "Term" : "Question";
     const backLabel = vocab ? "Definition" : "Answer";
-    const knownCount = Object.keys(flashState.known).length;
-    const againCount = Object.keys(flashState.again).length;
+    const progress = deckProgress(kit);
+    const knownCount = progress.known;
+    const againCount = progress.again;
     const percent = Math.round((position / order.length) * 100);
 
     return `
@@ -1331,7 +1452,9 @@ Active transport is the movement of substances against a concentration gradient,
           <span class="muted tiny">Card ${position + 1} of ${order.length}${
             flashState.reviewMode ? " · review" : flashState.shuffled ? " · shuffled" : ""
           }</span>
-          <span class="muted tiny">${knownCount} known${againCount ? ` · ${againCount} to review` : ""}</span>
+          <span class="muted tiny">${knownCount} known${againCount ? ` · ${againCount} to review` : ""}${
+            progress.due ? ` · ${progress.due} due` : ""
+          }</span>
         </div>
         <div class="deck-meter"><span style="width:${percent}%"></span></div>
 
@@ -1372,12 +1495,22 @@ Active transport is the movement of substances against a concentration gradient,
 
         <div class="row center tight deck-tools">
           ${
+            progress.due
+              ? `<button class="btn small" data-action="review-due">Review ${progress.due} due</button>`
+              : ""
+          }
+          ${
             againCount
-              ? `<button class="btn small" data-action="review-again">Review ${againCount} to learn</button>`
+              ? `<button class="btn small ghost" data-action="review-again">Still learning (${againCount})</button>`
               : ""
           }
           <button class="btn small ghost" data-action="shuffle-cards">Shuffle</button>
           <button class="btn small ghost" data-action="restart-cards">Restart</button>
+          ${
+            knownCount || againCount
+              ? `<button class="btn small ghost" data-action="reset-progress">Reset progress</button>`
+              : ""
+          }
           <button class="btn small ghost" data-action="deck-list">${
             flashState.showList ? "Back to card" : "Browse all"
           }</button>
@@ -1982,6 +2115,61 @@ Active transport is the movement of substances against a concentration gradient,
     };
   }
 
+  /** Read back a saved attempt: your answer next to the model answer. */
+  function openAttemptReview(attempt) {
+    const rows = (attempt.answers || [])
+      .map(
+        (entry, index) => `
+          <li class="review-row ${entry.correct ? "ok" : "bad"}">
+            <div class="review-head">
+              <span class="review-index">${index + 1}</span>
+              <span class="review-q">${esc(entry.question)}</span>
+              <span class="badge ${entry.correct ? "ready" : "error"}">${entry.correct ? "Correct" : "Review"}</span>
+            </div>
+            <p class="review-line"><span class="review-key">Your answer</span><span>${esc(entry.given || "— not answered —")}</span></p>
+            ${!entry.correct ? `<p class="review-line"><span class="review-key">Model answer</span><span>${esc(entry.expected || "")}</span></p>` : ""}
+            ${entry.feedback ? `<p class="review-line muted"><span class="review-key">Feedback</span><span>${esc(entry.feedback)}</span></p>` : ""}
+          </li>`,
+      )
+      .join("");
+    openModal({
+      title: `Attempt review — ${attempt.percent}%`,
+      wide: true,
+      confirmLabel: "Close",
+      body: `
+        <p class="muted small">${attempt.correct} of ${attempt.total} correct · ${esc(
+          new Date(attempt.takenAt).toLocaleString(),
+        )}${attempt.secondsUsed ? ` · took ${formatClock(attempt.secondsUsed)}` : ""}</p>
+        <ol class="review-list">${rows || '<li class="muted">This attempt has no saved answers.</li>'}</ol>`,
+      onConfirm: () => true,
+    });
+  }
+
+  function openShortcuts() {
+    openModal({
+      title: "Keyboard shortcuts",
+      confirmLabel: "Got it",
+      body: `
+        <div class="shortcut-list">
+          ${[
+            ["⌘K / Ctrl-K", "Search kits, resources and guide text"],
+            ["1 – 4", "Pick a quiz option"],
+            ["Enter", "Mark & next, or flip a card"],
+            ["Space", "Flip a flashcard"],
+            ["← / →", "Previous / next card"],
+            ["?", "This list"],
+            ["Esc", "Close a dialog"],
+          ]
+            .map(
+              ([keys, meaning]) =>
+                `<div class="shortcut-row"><kbd>${esc(keys)}</kbd><span>${esc(meaning)}</span></div>`,
+            )
+            .join("")}
+        </div>`,
+      onConfirm: () => true,
+    });
+  }
+
   function openSettings(note) {
     const draft = settingsDraftFromStore();
     if (!draft.models[draft.provider] && draft.provider === "nvidia") draft.models.nvidia = draft.savedModel;
@@ -2042,6 +2230,12 @@ Active transport is the movement of substances against a concentration gradient,
             <strong>Engine:</strong> ${esc(StudyForge.ai.providerLabel())}<br>
             <strong>Storage:</strong> ${(store.storageBytes() / 1024).toFixed(0)} KB used in this browser.
             Uploaded files and their raw text are never stored.
+          </div>
+          <div class="notice subtle">
+            <strong>Install &amp; offline</strong>
+            <p class="tiny">StudyForge works offline once it has been opened here. Install it to get an app icon and a full-screen window.</p>
+            <button class="btn small" data-install-app ${installPrompt ? "" : 'hidden title="Use your browser menu → Install app"'}>Install app</button>
+            <span class="tiny muted" id="install-status">${installPrompt ? "Ready to install." : "Not installable here yet — use your browser's Install option."}</span>
           </div>
           <div class="notice error-soft">
             <strong>Danger zone</strong>
@@ -2299,6 +2493,8 @@ Active transport is the movement of substances against a concentration gradient,
     const order = deckOrder(kit);
     if (!order.length) return;
     const cardIndex = order[flashState.index];
+    const card = kit.flashcards.items[cardIndex];
+    if (card) store.rateCard(kit.id, cardKey(card), kind === "known" ? "known" : "again");
     if (kind === "known") {
       flashState.known[cardIndex] = true;
       delete flashState.again[cardIndex];
@@ -2330,6 +2526,7 @@ Active transport is the movement of substances against a concentration gradient,
     flashState.flipped = false;
     flashState.shuffled = true;
     flashState.reviewMode = false;
+    flashState.dueOnly = false;
     render();
     toast("Deck shuffled.", "success");
   }
@@ -2978,6 +3175,33 @@ Active transport is the movement of substances against a concentration gradient,
         toast("Document saved.", "success");
         break;
       }
+      case "install-app": {
+        if (!installPrompt) {
+          toast("Use your browser menu → Install app.", "info");
+          break;
+        }
+        const prompt = installPrompt;
+        installPrompt = null;
+        prompt.prompt();
+        Promise.resolve(prompt.userChoice).then((choice) =>
+          toast(
+            choice && choice.outcome === "accepted" ? "StudyForge installed." : "Install dismissed.",
+            "info",
+          ),
+        );
+        break;
+      }
+      case "print-doc": {
+        els.view.classList.add("printing");
+        setTimeout(() => {
+          window.print();
+          els.view.classList.remove("printing");
+        }, 60);
+        break;
+      }
+      case "show-shortcuts":
+        openShortcuts();
+        break;
       case "copy-doc": {
         const resource = store.getResource(id);
         if (resource) copyText(resource.document, "Document copied");
@@ -3024,6 +3248,33 @@ Active transport is the movement of substances against a concentration gradient,
       case "card-again":
         markCard("again");
         break;
+      case "reset-progress": {
+        const kit = store.getKit(route.id);
+        if (!kit) break;
+        openModal({
+          title: "Reset card progress?",
+          body: `<p>This clears which cards you marked “Got it” or “Still learning”. The deck itself stays.</p>`,
+          confirmLabel: "Reset progress",
+          danger: true,
+          onConfirm: () => {
+            store.resetCardRatings(kit.id);
+            resetDeck(kit.id);
+            render();
+            toast("Card progress reset.", "success");
+          },
+        });
+        break;
+      }
+      case "review-due": {
+        flashState.reviewMode = true;
+        flashState.index = 0;
+        flashState.flipped = false;
+        flashState.showList = false;
+        flashState.dueOnly = true;
+        render();
+        toast("Reviewing the cards that are due.");
+        break;
+      }
       case "review-again": {
         flashState.reviewMode = true;
         flashState.index = 0;
@@ -3170,6 +3421,14 @@ Active transport is the movement of substances against a concentration gradient,
         resetQuiz(quizState.kitId);
         render();
         break;
+      case "review-attempt": {
+        const kitId = quizState.kitId || (route.name === "kit" ? route.id : null);
+        const kit = kitId ? store.getKit(kitId) : null;
+        const attempt = kit && kit.quiz && (kit.quiz.attempts || []).find((item) => item.id === id);
+        if (!attempt) break;
+        openAttemptReview(attempt);
+        break;
+      }
       case "delete-quiz-attempt": {
         const kitId = quizState.kitId || (route.name === "kit" ? route.id : null);
         if (kitId && store.deleteKitQuizAttempt(kitId, id)) toast("Attempt deleted.", "success");
@@ -3281,6 +3540,17 @@ Active transport is the movement of substances against a concentration gradient,
     });
 
     /* Theme: light by default, dark on demand; remembered per browser. */
+    window.addEventListener("beforeinstallprompt", (event) => {
+      event.preventDefault();
+      installPrompt = event;
+    });
+    window.addEventListener("appinstalled", () => {
+      installPrompt = null;
+      toast("StudyForge is installed. Find it with your other apps.", "success");
+    });
+    window.addEventListener("offline", () => toast("You are offline — StudyForge keeps working on device.", "info"));
+    window.addEventListener("online", () => toast("Back online.", "success"));
+
     const themeButton = $("btn-theme");
     const applyTheme = (theme) => {
       document.documentElement.dataset.theme = theme;
@@ -3411,6 +3681,11 @@ Active transport is the movement of substances against a concentration gradient,
         event.preventDefault();
         els.search.focus();
         els.search.select();
+      }
+      if (event.key === "?" && !typing && els.modalRoot.hidden) {
+        event.preventDefault();
+        openShortcuts();
+        return;
       }
       if (event.key === "Escape") {
         document.body.classList.remove("nav-open");

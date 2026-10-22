@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#f7f6fb">
 <title>StudyForge — forge your notes into study kits</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="StudyForge">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%236b4bff'/%3E%3Cstop offset='.6' stop-color='%23a855f7'/%3E%3Cstop offset='1' stop-color='%23ff7a45'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='9' fill='url(%23g)'/%3E%3Cpath d='M16 7c3.6 3.4 5.6 6.3 5.6 9.3a5.6 5.6 0 0 1-11.2 0C10.4 13.3 12.4 10.4 16 7Z' fill='%23fff' fill-opacity='.95'/%3E%3Cpath d='M16 18.4c1.7 1.8 2.6 3 2.6 4.1a2.6 2.6 0 0 1-5.2 0c0-1.1.9-2.3 2.6-4.1Z' fill='%23ff9a5a'/%3E%3C/svg%3E">
 <script>
   // Apply the saved theme before first paint so there is no flash.
@@ -775,6 +778,87 @@
   }
   .doc-toc a:hover{color:var(--accent);border-left-color:var(--accent)}
 
+  /* Attempt review */
+  .review-list{list-style:none;display:grid;gap:10px;padding:0;margin:12px 0 0}
+  .review-row{
+    padding:12px 14px;border-radius:12px;background:var(--panel-2);
+    border-left:3px solid var(--line-2);
+  }
+  .review-row.ok{border-left-color:var(--good)}
+  .review-row.bad{border-left-color:var(--danger)}
+  .review-head{display:flex;gap:10px;align-items:flex-start}
+  .review-index{
+    flex:0 0 auto;width:22px;height:22px;border-radius:50%;display:grid;place-items:center;
+    font-size:.72rem;font-weight:700;background:var(--panel-3);color:var(--muted);
+  }
+  .review-q{flex:1;font-weight:600;font-size:.92rem;line-height:1.35}
+  .review-line{display:flex;gap:10px;margin:6px 0 0 32px;font-size:.88rem;line-height:1.45}
+  .review-line .review-key{flex:0 0 92px;color:var(--muted-2);font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;padding-top:2px}
+  .review-line.muted{color:var(--muted)}
+  @media (max-width:560px){
+    .review-line{flex-direction:column;gap:2px;margin-left:32px}
+  }
+
+  /* Streak + heat strip */
+  .streak-strip{
+    display:flex;flex-wrap:wrap;gap:14px;align-items:center;
+    padding:12px 18px;border-radius:14px;margin-bottom:16px;
+    background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow);
+  }
+  .streak-strip.quiet{background:var(--panel-2);box-shadow:none;border-style:dashed}
+  .streak-flame{font-size:1.5rem;line-height:1}
+  .streak-copy{display:flex;flex-direction:column;gap:2px;min-width:0}
+  .streak-copy strong{font-size:.98rem}
+  .heat-strip{display:flex;gap:4px;margin-left:auto}
+  .heat-cell{width:14px;height:22px;border-radius:4px;background:var(--panel-3);transition:transform .15s ease}
+  .heat-cell.level-1{background:color-mix(in srgb,var(--accent) 28%,var(--panel-3))}
+  .heat-cell.level-2{background:color-mix(in srgb,var(--accent) 58%,var(--panel-3))}
+  .heat-cell.level-3{background:var(--accent)}
+  .heat-cell:hover{transform:scaleY(1.14)}
+  @media (max-width:720px){
+    .heat-strip{margin-left:0;width:100%}
+    .heat-cell{flex:1;width:auto}
+  }
+
+  /* Pick-up-where-you-left-off card */
+  .continue-card{
+    display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between;
+    padding:16px 20px;border-radius:16px;margin-bottom:16px;
+    background:linear-gradient(120deg,color-mix(in srgb,var(--accent) 14%,transparent),transparent 72%),var(--panel);
+    border:1px solid color-mix(in srgb,var(--accent) 32%,var(--border));
+  }
+  .continue-main h3{margin:6px 0 2px;font-size:1.05rem}
+  .continue-main p{margin:0}
+
+  /* Shortcut help */
+  .shortcut-list{display:grid;gap:8px}
+  .shortcut-row{display:flex;gap:12px;align-items:center;justify-content:space-between;font-size:.9rem}
+  .shortcut-row kbd{
+    font:inherit;font-size:.78rem;font-weight:650;padding:3px 8px;border-radius:7px;
+    background:var(--panel-2);border:1px solid var(--border);border-bottom-width:2px;color:var(--text);
+    white-space:nowrap;
+  }
+  .shortcut-row span{color:var(--muted);text-align:right}
+
+  @media (max-width:720px){
+    .provider-grid{grid-template-columns:1fr}
+    .modal-wide{width:calc(100vw - 16px)}
+    .modal-wide .modal-body{padding:14px}
+    .settings-more .field-row{grid-template-columns:1fr}
+    .continue-card{flex-direction:column;align-items:flex-start}
+    .shortcut-row{flex-direction:column;align-items:flex-start;gap:4px}
+    .shortcut-row span{text-align:left}
+  }
+
+  /* Printing a study guide should print the guide, nothing else. */
+  @media print{
+    #sidebar,#topbar,.doc-toc,.toolbar,.deck-tools,.doc-actions,.modal-root,.toast-root{display:none!important}
+    #app,#main,.view{display:block!important;background:#fff!important;color:#111!important}
+    body{background:#fff!important;color:#111!important}
+    .doc-body,#view{padding:0!important;max-width:none!important}
+    a{color:#111!important;text-decoration:none!important}
+  }
+
   /* collapsed sidebar ---------------------------------------------- */
   body.nav-collapsed{--sidebar-w:78px}
   body.nav-collapsed .brand-text,
@@ -923,14 +1007,14 @@
       done = true;
       console.warn("[StudyForge] " + reason + "; loading the project files directly.");
       [
-        "./src/store.js?v=2026-10-21a",
-        "./src/local.js?v=2026-10-21a",
-        "./src/markdown.js?v=2026-10-21a",
-        "./src/ocr.js?v=2026-10-21a",
-        "./src/ai.js?v=2026-10-21a",
-        "./src/jobs.js?v=2026-10-21a",
-        "./src/ui.js?v=2026-10-21a",
-        "./src/main.js?v=2026-10-21a",
+        "./src/store.js?v=2026-10-21b",
+        "./src/local.js?v=2026-10-21b",
+        "./src/markdown.js?v=2026-10-21b",
+        "./src/ocr.js?v=2026-10-21b",
+        "./src/ai.js?v=2026-10-21b",
+        "./src/jobs.js?v=2026-10-21b",
+        "./src/ui.js?v=2026-10-21b",
+        "./src/main.js?v=2026-10-21b",
       ].forEach(function (src) {
         var script = document.createElement("script");
         script.src = src;
@@ -951,6 +1035,16 @@
     window.addEventListener("studyforge:booted", function () {
       done = true;
     });
+
+    // Install as an app and keep working offline. Failure is silent: the site
+    // works perfectly well without a service worker.
+    if ("serviceWorker" in navigator && location.protocol !== "file:") {
+      window.addEventListener("load", function () {
+        setTimeout(function () {
+          navigator.serviceWorker.register("./sw.js").catch(function () {});
+        }, 1200);
+      });
+    }
   })();
 </script>
 </body>
