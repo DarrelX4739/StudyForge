@@ -235,6 +235,35 @@ async function playQuiz({ pick = 0 } = {}) {
     check("countdown shows a daily card pace", /cards a day/.test(strip ? strip.textContent : ""));
   }
 
+  // ---------- activity page ----------
+  window.location.hash = "#/activity";
+  await wait(200);
+  check("activity page renders", /Your activity/.test(view().textContent));
+  check("activity page has a month calendar", view().querySelectorAll(".month-cell").length >= 28);
+  check("activity page lists attempts", /Quiz attempts/.test(view().textContent));
+  check(
+    "activity page counts the streak",
+    /streak/i.test(view().textContent) && Boolean(view().querySelector(".stat-strip")),
+  );
+  const exportBtn = view().querySelector('[data-action="download-attempts"]');
+  check("activity page can export attempts", Boolean(exportBtn));
+  if (exportBtn) {
+    const RealBlob = window.Blob;
+    let csv = "";
+    window.Blob = function (parts, options) {
+      csv = String((parts && parts[0]) || "");
+      return new RealBlob(parts, options);
+    };
+    const realCreate = window.URL.createObjectURL;
+    window.URL.createObjectURL = () => "blob:stub";
+    exportBtn.click();
+    await wait(150);
+    window.Blob = RealBlob;
+    if (realCreate) window.URL.createObjectURL = realCreate;
+    else delete window.URL.createObjectURL;
+    check("attempt CSV has a header and rows", /"Date","Kit","Score"/.test(csv), `${csv.split(/\r?\n/).length - 1} rows`);
+  }
+
   // ---------- week strip ----------
   window.location.hash = "#/";
   await wait(150);

@@ -128,6 +128,7 @@
     moon: '<path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/>',
     chevron: '<path d="M9 6l6 6-6 6"/>',
     keyboard: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/>',
+    chart: '<path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15l3-4 3 2 4-6"/>',
     arrowLeft: '<path d="M15 5l-7 7 7 7"/>',
     arrowRight: '<path d="M9 5l7 7-7 7"/>',
     quiz: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.4 2.3c-.6.2-1 .8-1 1.4v.3"/><path d="M12 16.8h.01"/>',
@@ -194,6 +195,8 @@
       route = { name: "kit", id: parts[1], tab };
     } else if (parts[0] === "resource" && parts[1]) {
       route = { name: "resource", id: parts[1] };
+    } else if (parts[0] === "activity") {
+      route = { name: "activity", id: null };
     } else {
       route = { name: "dashboard", id: null };
     }
@@ -474,6 +477,8 @@
       els.view.appendChild(
         kit ? renderKit(kit, route.tab) : renderMissing("That study kit no longer exists."),
       );
+    } else if (route.name === "activity") {
+      els.view.appendChild(renderActivity());
     } else if (route.name === "resource") {
       const resource = store.getResource(route.id);
       els.view.appendChild(resource ? renderResource(resource) : renderMissing("That resource no longer exists."));
@@ -678,6 +683,13 @@
         <button class="nav-item nav-add" data-action="new-class" title="New class">
           <span class="nav-icon">${icon("plus")}</span>
           <span class="nav-text">New class</span>
+        </button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">Progress</div>
+        <button class="nav-item ${route.name === "activity" ? "active" : ""}" data-action="open-activity" title="Your activity">
+          <span class="nav-icon">${icon("chart")}</span>
+          <span class="nav-text">Activity</span>
         </button>
       </div>
       <div class="nav-group">
@@ -1303,6 +1315,167 @@ Active transport is the movement of substances against a concentration gradient,
           ${hasQuiz && !step.quiet ? `<a class="btn small ghost" href="#/kit/${esc(kit.id)}/questions">Quiz</a>` : ""}
         </div>
       </section>`;
+  }
+
+  /**
+   * Activity: a month calendar, month totals and every quiz attempt across the
+   * library in one place.
+   */
+  function renderActivity() {
+    const state = store.get();
+    const page = document.createElement("div");
+    page.className = "page";
+    const streak = store.streakInfo();
+    const activity = state.activity || {};
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const first = new Date(year, month, 1);
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const lead = (first.getDay() + 6) % 7; // Monday-first grid
+    const cells = [];
+    for (let index = 0; index < lead; index += 1) cells.push(null);
+    let studiedDays = 0;
+    let monthCards = 0;
+    for (let day = 1; day <= daysInMonth; day += 1) {
+      const date = new Date(year, month, day);
+      const key = store.dayKey(date);
+      const entry = activity[key] || {};
+      const cards = Number(entry.cards) || 0;
+      const quizzes = Number(entry.quizzes) || 0;
+      const guides = Number(entry.guides) || 0;
+      const total = cards + quizzes + guides;
+      if (total > 0) studiedDays += 1;
+      monthCards += cards;
+      cells.push({
+        day,
+        key,
+        total,
+        cards,
+        quizzes,
+        future: key > store.dayKey(now),
+        today: key === store.dayKey(now),
+      });
+    }
+
+    const attempts = [];
+    state.kits.forEach((kit) => {
+      ((kit.quiz && kit.quiz.attempts) || []).forEach((attempt) => {
+        attempts.push({ kit, attempt });
+      });
+    });
+    attempts.sort((a, b) => String(b.attempt.takenAt).localeCompare(String(a.attempt.takenAt)));
+    const monthAttempts = attempts.filter((entry) => {
+      const date = new Date(entry.attempt.takenAt);
+      return date.getFullYear() === year && date.getMonth() === month;
+    });
+    const average = monthAttempts.length
+      ? Math.round(monthAttempts.reduce((sum, entry) => sum + entry.attempt.percent, 0) / monthAttempts.length)
+      : 0;
+    const bestMonth = monthAttempts.reduce((best, entry) => Math.max(best, entry.attempt.percent), 0);
+    const seconds = monthAttempts.reduce((sum, entry) => sum + (entry.attempt.secondsUsed || 0), 0);
+
+    page.innerHTML = `
+      <header class="page-head">
+        <div class="page-title">
+          <p class="eyebrow">Progress</p>
+          <h1>Your activity</h1>
+        </div>
+        <div class="row tight">
+          ${attempts.length ? `<button class="btn" data-action="download-attempts">Export attempts</button>` : ""}
+          <a class="btn primary" href="#/">Back to study kits</a>
+        </div>
+      </header>
+      <p class="page-sub">Everything here is counted from what you actually did in this browser — cards rated,
+        guides built and quizzes taken.</p>
+      <div class="stat-strip">
+        <div class="stat"><span class="stat-value">${streak.days}</span><span class="stat-label">Day streak</span></div>
+        <div class="stat"><span class="stat-value">${studiedDays}</span><span class="stat-label">Study days this month</span></div>
+        <div class="stat"><span class="stat-value">${monthCards}</span><span class="stat-label">Cards rated this month</span></div>
+        <div class="stat"><span class="stat-value">${monthAttempts.length}</span><span class="stat-label">Quizzes this month</span></div>
+        <div class="stat accent"><span class="stat-value">${monthAttempts.length ? `${average}%` : "—"}</span><span class="stat-label">Average score</span></div>
+      </div>
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>${esc(now.toLocaleDateString(undefined, { month: "long", year: "numeric" }))}</h2>
+            <p class="muted tiny">${bestMonth ? `Best score this month ${bestMonth}% · ${formatMinutes(seconds)} of quizzes.` : "No quizzes this month yet."}</p>
+          </div>
+        </div>
+        <div class="month-grid" role="img" aria-label="Study calendar for this month">
+          ${["M", "T", "W", "T", "F", "S", "S"]
+            .map((label) => `<span class="month-head">${label}</span>`)
+            .join("")}
+          ${cells
+            .map((cell) => {
+              if (!cell) return `<span class="month-cell blank"></span>`;
+              const level = cell.total === 0 ? "" : cell.total < 3 ? "low" : cell.total < 8 ? "mid" : "high";
+              const label = `${new Date(cell.key).toLocaleDateString(undefined, {
+                day: "numeric",
+                month: "short",
+              })}${cell.total ? ` — ${plural(cell.total, "study action")}` : " — nothing yet"}`;
+              return `<span class="month-cell ${level} ${cell.today ? "today" : ""} ${cell.future ? "future" : ""}"
+                title="${esc(label)}" aria-label="${esc(label)}">${cell.day}</span>`;
+            })
+            .join("")}
+        </div>
+      </section>
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Quiz attempts</h2>
+            <p class="muted tiny">${attempts.length ? `Every attempt, newest first.` : "No attempts yet — take a quiz and it will appear here."}</p>
+          </div>
+        </div>
+        ${
+          attempts.length
+            ? `<ol class="attempt-list">${attempts
+                .slice(0, 40)
+                .map(
+                  ({ kit, attempt }) => `
+                <li class="attempt-row">
+                  <span class="attempt-score ${attempt.percent >= 70 ? "good" : attempt.percent >= 50 ? "mid" : "low"}">${attempt.percent}%</span>
+                  <span class="attempt-main">
+                    <strong>${esc(kit.name)}</strong>
+                    <span class="muted tiny">${esc(new Date(attempt.takenAt).toLocaleString())}${
+                      attempt.secondsUsed ? ` · ${formatClock(attempt.secondsUsed)}` : ""
+                    }</span>
+                  </span>
+                  <span class="attempt-bar"><span style="width:${attempt.percent}%"></span></span>
+                  <a class="btn ghost small" href="#/kit/${esc(kit.id)}/questions">Open kit</a>
+                </li>`,
+                )
+                .join("")}</ol>`
+            : ""
+        }
+      </section>`;
+    return page;
+  }
+
+  /** Every attempt in the library as CSV, for a spreadsheet or a tutor. */
+  function attemptsToCsv(state) {
+    const cell = (value) => `"${String(value == null ? "" : value).replace(/"/g, '""')}"`;
+    const rows = [["Date", "Kit", "Score", "Correct", "Total", "Percent", "Seconds"].map(cell).join(",")];
+    const entries = [];
+    state.kits.forEach((kit) => {
+      ((kit.quiz && kit.quiz.attempts) || []).forEach((attempt) => entries.push({ kit, attempt }));
+    });
+    entries
+      .sort((a, b) => String(a.attempt.takenAt).localeCompare(String(b.attempt.takenAt)))
+      .forEach(({ kit, attempt }) => {
+        rows.push(
+          [
+            cell(new Date(attempt.takenAt).toISOString().slice(0, 16).replace("T", " ")),
+            cell(kit.name),
+            cell(attempt.percent),
+            cell(attempt.correct),
+            cell(attempt.total),
+            cell(attempt.percent),
+            cell(attempt.secondsUsed || 0),
+          ].join(","),
+        );
+      });
+    return `\uFEFF${rows.join("\r\n")}\r\n`;
   }
 
   function renderEmptyDashboard() {
@@ -4745,6 +4918,9 @@ Active transport is the movement of substances against a concentration gradient,
         }
         break;
       }
+      case "open-activity":
+        navigate("#/activity");
+        break;
       case "open-kit":
         navigate(`#/kit/${id}`);
         break;
@@ -5353,6 +5529,15 @@ Active transport is the movement of substances against a concentration gradient,
       case "print-deck": {
         const kit = store.getKit(id);
         if (kit) printDeck(kit);
+        break;
+      }
+      case "download-attempts": {
+        download(
+          `studyforge-attempts-${new Date().toISOString().slice(0, 10)}.csv`,
+          attemptsToCsv(store.get()),
+          "text/csv;charset=utf-8",
+        );
+        toast("Attempts exported.", "success");
         break;
       }
       case "download-results": {
