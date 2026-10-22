@@ -273,6 +273,34 @@ async function playQuiz({ pick = 0 } = {}) {
     check("attempts show a per-question pace", /s per question/.test(String(pacing && pacing.textContent)));
   }
 
+  // ---------- catch-up review across kits ----------
+  window.location.hash = "#/";
+  await wait(180);
+  const mixedBtn = view().querySelector('[data-action="review-mixed"]');
+  check("dashboard offers a cross-kit review", Boolean(mixedBtn));
+  if (mixedBtn) {
+    mixedBtn.click();
+    await wait(280);
+    check("a catch-up session opens", /Catch-up review|Card \d+ of/.test(view().textContent));
+    const reveal = view().querySelector('[data-action="mixed-reveal"]');
+    check("catch-up card can be revealed", Boolean(reveal));
+    if (reveal) {
+      reveal.click();
+      await wait(150);
+      check("the answer shows after revealing", Boolean(view().querySelector(".mixed-answer:not([hidden])")));
+      const known = view().querySelector('[data-action="mixed-known"]');
+      known.click();
+      await wait(250);
+      check("marking moves to the next card", Boolean(view().querySelector('[data-action="mixed-reveal"], .response')));
+      const stop = view().querySelector('[data-action="mixed-stop"]');
+      if (stop) {
+        stop.click();
+        await wait(180);
+        check("ending the session clears it", !view().querySelector(".mixed-review"));
+      }
+    }
+  }
+
   // ---------- activity page ----------
   window.location.hash = "#/activity";
   await wait(200);

@@ -915,6 +915,20 @@
     border-color:color-mix(in srgb,var(--accent) 35%,transparent);
   }
 
+  /* Catch-up review across kits */
+  .mixed-face{
+    display:flex;flex-direction:column;align-items:center;gap:8px;padding:34px 22px;
+    border-radius:18px;border:1px solid var(--line);background:var(--panel);
+    box-shadow:var(--shadow);
+  }
+  .mixed-face .fc-text{font-size:1.35rem;font-weight:600;text-align:center;line-height:1.35}
+  .mixed-answer{
+    max-width:520px;margin:14px auto 4px;padding:12px 16px;border-radius:12px;text-align:center;
+    background:color-mix(in srgb,var(--good) 9%,var(--panel));border:1px solid color-mix(in srgb,var(--good) 32%,transparent);
+  }
+  .mixed-answer[hidden]{display:none}
+  .mixed-answer p{margin:6px 0 0;font-size:.95rem}
+
   /* Select text in a guide → make a card */
   .selection-card-btn{
     position:absolute;z-index:45;padding:7px 12px;border-radius:9px;border:0;cursor:pointer;
@@ -1387,14 +1401,14 @@
       done = true;
       console.warn("[StudyForge] " + reason + "; loading the project files directly.");
       [
-        "./src/store.js?v=2026-10-23e",
-        "./src/local.js?v=2026-10-23e",
-        "./src/markdown.js?v=2026-10-23e",
-        "./src/ocr.js?v=2026-10-23e",
-        "./src/ai.js?v=2026-10-23e",
-        "./src/jobs.js?v=2026-10-23e",
-        "./src/ui.js?v=2026-10-23e",
-        "./src/main.js?v=2026-10-23e",
+        "./src/store.js?v=2026-10-23f",
+        "./src/local.js?v=2026-10-23f",
+        "./src/markdown.js?v=2026-10-23f",
+        "./src/ocr.js?v=2026-10-23f",
+        "./src/ai.js?v=2026-10-23f",
+        "./src/jobs.js?v=2026-10-23f",
+        "./src/ui.js?v=2026-10-23f",
+        "./src/main.js?v=2026-10-23f",
       ].forEach(function (src) {
         var script = document.createElement("script");
         script.src = src;

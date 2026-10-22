@@ -71,6 +71,8 @@ A modern, responsive layout with a grouped sidebar:
 - **Streak strip** on the dashboard shows consecutive study days and a 14-day activity heat strip,
   driven by real actions (guides generated, cards rated, quizzes finished).
 - **Continue card** jumps straight back into the kit you last worked on.
+- **Catch-up review** pulls every due card across the whole library into one session, kit by kit,
+  hardest first.
 - **Cards due** panel totals every card waiting for review and starts a due-only session in one click.
 - **Next 7 days** strip shows how many cards come back each day, so a revision plan is visible at a glance.
 - **Study now** on any kit does the right next thing: due cards if any are waiting, otherwise the quiz.
@@ -448,7 +450,7 @@ npm test
 | `local-engine` | The on-device generator on its own (plain node): guide sections, card quality, four-option questions, seeds and refusals. |
 | `insights` | Progress analytics across attempts, trouble spots, per-question pace, hardest cards, card editing, the review schedule and exam resume. |
 
-All eight suites pass — 295 checks, zero console errors.
+All eight suites pass — 304 checks, zero console errors.
 
 ## Limitations
 

@@ -41,6 +41,8 @@
 
   // Set when the dashboard asks to jump into a due-card review.
   let pendingDueReview = null;
+  // A due-review session that spans kits: { order: [...], index, total }.
+  let mixedReview = null;
   // Match game: pair up terms and definitions. Idle unless started from a deck.
   let matchState = { kitId: null, active: false, tiles: [], picked: [], matched: [], wrong: 0, startedAt: 0, finished: false };
   let matchTick = null;
@@ -454,7 +456,10 @@
     if (document.body.classList.contains("doc-focus") && !(route.name === "kit" && route.tab === "documents")) {
       document.body.classList.remove("doc-focus");
     }
-    if (!(route.name === "kit" && route.tab === "flashcards")) stopMatchClock();
+    if (!(route.name === "kit" && route.tab === "flashcards")) {
+      stopMatchClock();
+      mixedReview = null;
+    }
     const snapshot = captureDrafts();
     els.view.innerHTML = "";
 
@@ -1086,7 +1091,10 @@ Active transport is the movement of substances against a concentration gradient,
             } A few minutes now keeps everything fresh.</p>
           </div>
         </div>
-        <button class="btn primary small" data-action="review-all-due" data-id="${esc(best.kit.id)}">Review now</button>
+        <div class="row tight">
+          <button class="btn small ghost" data-action="review-mixed">All kits together</button>
+          <button class="btn primary small" data-action="review-all-due" data-id="${esc(best.kit.id)}">Review now</button>
+        </div>
       </section>`;
   }
 
@@ -2472,7 +2480,59 @@ Active transport is the movement of substances against a concentration gradient,
       : "";
   }
 
+  /** A cross-kit review session: the same card UI, but sourced kit by kit. */
+  function renderMixedReview() {
+    const step = mixedReview.order[mixedReview.index];
+    if (!step) {
+      mixedReview = null;
+      return "";
+    }
+    const kit = store.getKit(step.kitId);
+    const card = kit && kit.flashcards && kit.flashcards.items[step.cardIndex];
+    if (!kit || !card) {
+      return `<p class="muted small">That card is gone.</p>`;
+    }
+    return `
+      <div class="deck mixed-review">
+        <div class="deck-bar">
+          <span class="muted tiny">Card ${mixedReview.index + 1} of ${mixedReview.order.length} · across ${plural(
+            new Set(mixedReview.order.map((entry) => entry.kitId)).size,
+            "kit",
+          )}</span>
+          <span class="muted tiny">${esc(kit.name)}</span>
+        </div>
+        <div class="fc-stage">
+          <div class="fc-face fc-front mixed-face">
+            <span class="fc-side">Prompt</span>
+            <span class="fc-text">${esc(card.front)}</span>
+            <span class="fc-hint">From ${esc(kit.name)}</span>
+          </div>
+        </div>
+        <div class="mixed-answer" ${mixedReview.revealed ? "" : "hidden"}>
+          <span class="fc-side">Answer</span>
+          <p>${esc(card.back)}</p>
+        </div>
+        <div class="row center tight">
+          <button class="btn small" data-action="mixed-reveal">${mixedReview.revealed ? "Marked" : "Show answer"}</button>
+          <button class="btn small again" data-action="mixed-again" ${mixedReview.revealed ? "" : "disabled"}>Still learning</button>
+          <button class="btn small known" data-action="mixed-known" ${mixedReview.revealed ? "" : "disabled"}>Got it</button>
+          <button class="btn small ghost" data-action="mixed-stop">End session</button>
+        </div>
+      </div>`;
+  }
+
   function renderKitFlashcards(kit, resources) {
+    if (mixedReview) {
+      return `<section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Catch-up review</h2>
+            <p class="muted tiny">Every card that is due, across the whole library.</p>
+          </div>
+        </div>
+        ${renderMixedReview()}
+      </section>`;
+    }
     const withDocs = resources.filter((resource) => resource.document);
     const cards = kit.flashcards;
 
@@ -2965,6 +3025,37 @@ Active transport is the movement of substances against a concentration gradient,
             .join("")}
         </div>
       </div>`;
+  }
+
+  /** Gather every due card in the library, hardest kits first, capped at 40. */
+  function startMixedReview() {
+    const now = Date.now();
+    const order = [];
+    store.get().kits.forEach((kit) => {
+      const deck = kit.flashcards;
+      if (!deck || !deck.items.length) return;
+      const ratings = deck.ratings || {};
+      const due = [];
+      deck.items.forEach((card, cardIndex) => {
+        const rating = ratings[cardKey(card)];
+        if (!rating || new Date(rating.dueAt).getTime() <= now) {
+          due.push({ kitId: kit.id, cardIndex, lapses: rating ? rating.lapses || 0 : 0 });
+        }
+      });
+      due.sort((a, b) => b.lapses - a.lapses);
+      order.push(...due);
+    });
+    if (!order.length) {
+      toast("Nothing is due right now — come back later.", "info");
+      return;
+    }
+    mixedReview = { order: order.slice(0, 40), index: 0, revealed: false };
+    if (route.name !== "kit" || route.tab !== "flashcards") {
+      const first = mixedReview.order[0];
+      window.location.hash = `#/kit/${first.kitId}/flashcards`;
+    } else {
+      render();
+    }
   }
 
   function renderDeckList(items) {
@@ -5473,6 +5564,49 @@ Active transport is the movement of substances against a concentration gradient,
         }
         window.location.hash = `#/kit/${kit.id}`;
         toast("Add a resource first — then everything else follows.", "info");
+        break;
+      }
+      case "review-mixed": {
+        startMixedReview();
+        break;
+      }
+      case "mixed-reveal": {
+        if (!mixedReview) break;
+        mixedReview.revealed = true;
+        render();
+        break;
+      }
+      case "mixed-known":
+      case "mixed-again": {
+        if (!mixedReview) break;
+        const step = mixedReview.order[mixedReview.index];
+        const kit = store.getKit(step.kitId);
+        const card = kit && kit.flashcards && kit.flashcards.items[step.cardIndex];
+        if (kit && card) {
+          store.rateCard(kit.id, cardKey(card), action === "mixed-known" ? "known" : "again");
+        }
+        mixedReview.index += 1;
+        mixedReview.revealed = false;
+        if (mixedReview.index >= mixedReview.order.length) {
+          mixedReview = null;
+          render();
+          toast("Catch-up review finished — everything you marked is rescheduled.", "success");
+          break;
+        }
+        // Follow the session across kits.
+        const next = mixedReview.order[mixedReview.index];
+        const nextHash = `#/kit/${next.kitId}/flashcards`;
+        if (window.location.hash !== nextHash) {
+          window.location.hash = nextHash;
+          break;
+        }
+        render();
+        break;
+      }
+      case "mixed-stop": {
+        mixedReview = null;
+        render();
+        toast("Catch-up review ended.");
         break;
       }
       case "review-all-due": {
