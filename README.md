@@ -228,8 +228,9 @@ The same material as the quiz, but as a **timed paper**:
 - Submit early (with a confirmation if questions are unanswered) or let the clock auto-submit at zero.
   The clock keeps running if you switch tabs; reloading the page abandons the run.
 - The result screen shows the score, percentage, time used, and a full review with the correct answer
-  highlighted plus the explanation. **Retake** reuses the questions with a fresh clock; the last score
-  is remembered on the exam's front page.
+  highlighted plus the explanation. **Retake** reuses the questions with a fresh clock.
+- **Every sitting is saved.** The practice-test page lists past attempts with score, date and time, and
+  **Review** reopens any sitting answer by answer.
 
 ## Choosing the engine
 
