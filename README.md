@@ -247,6 +247,7 @@ merged, de-duplicated by prompt and interleaved so the deck is not grouped by re
 - **Undo** on every delete — the toast puts the kit, class or attempt straight back.
 - **Question palette** in a running practice test: one tap jumps to any question and shows what is
   already answered.
+- **Print paper**: a practice test prints as an exam paper with a separate answer key.
 - **Practice tests autosave**: ticked answers survive a reload, and the clock keeps its remaining
   time, so a stray refresh never voids a paper.
 - **Resume a quiz**: an unfinished run is kept on your device, so closing the tab or reloading
@@ -445,7 +446,7 @@ npm test
 | `local-engine` | The on-device generator on its own (plain node): guide sections, card quality, four-option questions, seeds and refusals. |
 | `insights` | Progress analytics across attempts, trouble spots, per-question pace, hardest cards, card editing, the review schedule and exam resume. |
 
-All eight suites pass — 287 checks, zero console errors.
+All eight suites pass — 289 checks, zero console errors.
 
 ## Limitations
 

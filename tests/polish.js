@@ -16,6 +16,12 @@ window.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
 window.scrollTo = () => {};
 window.print = () => { window.__printed = (window.__printed || 0) + 1; };
 window.HTMLElement.prototype.scrollIntoView = () => {};
+// Downloads create an <a download> and click it; jsdom logs a navigation error.
+const anchorClick = window.HTMLAnchorElement.prototype.click;
+window.HTMLAnchorElement.prototype.click = function () {
+  if (this.hasAttribute("download")) return;
+  return anchorClick.call(this);
+};
 const errors = [];
 window.console.error = (...args) => errors.push(args.map(String).join(" "));
 for (const file of ["store", "local", "markdown", "ocr", "ai", "jobs", "ui", "main"]) {

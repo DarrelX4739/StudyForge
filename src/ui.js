@@ -2897,6 +2897,7 @@ Active transport is the movement of substances against a concentration gradient,
           </div>
           <div class="row tight">
             <button class="btn small primary" data-action="start-exam" data-id="${esc(kit.id)}">Start exam</button>
+            <button class="btn small" data-action="print-exam" data-id="${esc(kit.id)}">Print paper</button>
             <button class="btn small" data-action="download-exam" data-id="${esc(kit.id)}">Download .md</button>
             <button class="btn small" data-action="make-exam" data-id="${esc(kit.id)}">New exam</button>
           </div>
@@ -4773,6 +4774,39 @@ Active transport is the movement of substances against a concentration gradient,
     );
   }
 
+  /** A printable paper from a list of multiple-choice items (quiz or exam). */
+  function printChoicePaper(title, items, note) {
+    const questions = items
+      .map(
+        (item, index) => `
+          <div class="sheet-q">
+            <p><strong>${index + 1}.</strong> ${esc(item.question)}</p>
+            <ol class="sheet-options" type="A">${item.options.map((option) => `<li>${esc(option)}</li>`).join("")}</ol>
+          </div>`,
+      )
+      .join("");
+    const key = items
+      .map(
+        (item, index) =>
+          `<li><strong>${index + 1}.</strong> ${String.fromCharCode(65 + item.answerIndex)} — ${esc(
+            item.options[item.answerIndex],
+          )}</li>`,
+      )
+      .join("");
+    printSheet(`${title}`, `${note ? `<p class="sheet-note">${esc(note)}</p>` : ""}${questions}
+      <h2 class="sheet-page-break">Answer key</h2><ol class="sheet-key">${key}</ol>`);
+  }
+
+  function printExam(kit) {
+    const exam = kit.exam;
+    if (!exam || !exam.items.length) return;
+    printChoicePaper(
+      `${kit.name} — practice test`,
+      exam.items,
+      `${exam.items.length} questions · ${exam.durationMinutes} minutes. Sit it with a timer, then mark with the key.`,
+    );
+  }
+
   function printQuiz(kit) {
     const items = (kit.quiz && kit.quiz.items) || [];
     if (!items.length) return;
@@ -5539,6 +5573,11 @@ Active transport is the movement of substances against a concentration gradient,
         } else {
           submitExam("manual");
         }
+        break;
+      }
+      case "print-exam": {
+        const kit = store.getKit(id);
+        if (kit) printExam(kit);
         break;
       }
       case "print-quiz": {

@@ -14,6 +14,13 @@ const dom = new JSDOM(html, { url: "http://localhost:8000/#/", runScripts: "outs
 const { window } = dom;
 window.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
 window.scrollTo = () => {};
+window.print = () => {};
+// Downloads create an <a download> and click it; jsdom logs a navigation error.
+const anchorClick = window.HTMLAnchorElement.prototype.click;
+window.HTMLAnchorElement.prototype.click = function () {
+  if (this.hasAttribute("download")) return;
+  return anchorClick.call(this);
+};
 window.HTMLElement.prototype.scrollIntoView = () => {};
 const errors = [];
 window.console.error = (...args) => errors.push(args.map(String).join(" "));
@@ -190,6 +197,16 @@ async function playQuiz({ pick = 0 } = {}) {
   }
   check("practice test can be started", Boolean(startExamBtn));
   if (startExamBtn) {
+    const paper = view().querySelector('[data-action="print-exam"]');
+    check("practice test can be printed", Boolean(paper));
+    if (paper) {
+      paper.click();
+      await wait(140);
+      const sheet = window.document.getElementById("print-sheet");
+      check("printed paper has an answer key", Boolean(sheet) && /Answer key/.test(sheet.textContent));
+      sheet && sheet.remove();
+      window.document.body.classList.remove("print-sheet");
+    }
     startExamBtn.click();
     await wait(200);
     const opt = view().querySelector('[data-action="exam-answer"]');
