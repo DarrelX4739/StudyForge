@@ -1037,6 +1037,7 @@ Active transport is the movement of substances against a concentration gradient,
         <section class="panel">
           <div class="panel-head">
             <h2>${esc(selected.name)}</h2>
+            <div class="doc-head-actions">
             <div class="row tight">
               <a class="btn small" href="#/resource/${esc(selected.id)}">Open resource</a>
               <button class="btn small" data-action="listen-doc" data-id="${esc(selected.id)}">${
@@ -1051,6 +1052,7 @@ Active transport is the movement of substances against a concentration gradient,
               <button class="icon-btn small" data-action="doc-smaller" title="Smaller text" aria-label="Smaller text">A−</button>
               <button class="icon-btn small" data-action="doc-bigger" title="Bigger text" aria-label="Bigger text">A+</button>
               <button class="btn small ghost" data-action="doc-focus" title="Hide everything but the guide">Focus</button>
+            </div>
             </div>
           </div>
           ${
