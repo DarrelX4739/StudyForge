@@ -89,6 +89,7 @@
     typed: "",
     typedVerdict: null,
     finished: false,
+    unseenMode: false,
     lastScheduled: null,
   };
   // Which classes / kits are open in the sidebar tree.
@@ -213,6 +214,7 @@
       typed: "",
       typedVerdict: null,
       finished: false,
+      unseenMode: false,
       lastScheduled: null,
     };
   }
@@ -349,6 +351,15 @@
       const hardest = flashState.hardList && flashState.hardList.length ? flashState.hardList : hardestCards(kit);
       if (hardest.length) return hardest;
       flashState.hardMode = false;
+    }
+    if (flashState.unseenMode) {
+      const ratings = (kit.flashcards && kit.flashcards.ratings) || {};
+      const unseen = kit.flashcards.items
+        .map((card, index) => ({ card, index }))
+        .filter(({ card }) => !ratings[cardKey(card)])
+        .map(({ index }) => index);
+      if (unseen.length) return unseen;
+      flashState.unseenMode = false;
     }
     if (flashState.reviewMode) {
       const now = Date.now();
@@ -2079,7 +2090,8 @@ Active transport is the movement of substances against a concentration gradient,
             ${
               cards
                 ? `<button class="btn small" data-action="print-deck" data-id="${esc(kit.id)}">Print deck</button>
-                   <button class="btn small" data-action="download-flashcards" data-id="${esc(kit.id)}">Download .md</button>`
+                   <button class="btn small" data-action="download-flashcards" data-id="${esc(kit.id)}">Download .md</button>
+                   <button class="btn small" data-action="download-flashcards-csv" data-id="${esc(kit.id)}">Export for Anki</button>`
                 : ""
             }
           </div>
@@ -2345,6 +2357,11 @@ Active transport is the movement of substances against a concentration gradient,
           ${
             hardestCards(kit).length
               ? `<button class="btn small ghost" data-action="review-hardest">Hardest (${hardestCards(kit).length})</button>`
+              : ""
+          }
+          ${
+            progress.unseen
+              ? `<button class="btn small ghost" data-action="review-unseen">Unseen (${progress.unseen})</button>`
               : ""
           }
           <button class="btn small ghost" data-action="toggle-typing">${
@@ -3747,6 +3764,16 @@ Active transport is the movement of substances against a concentration gradient,
     return lines.join("\n");
   }
 
+  /** CSV for Anki / Quizlet import. Quoted properly, and with a BOM for Excel. */
+  function flashcardsToCsv(kit) {
+    const cell = (value) => `"${String(value == null ? "" : value).replace(/"/g, '""').replace(/\r?\n/g, " ")}"`;
+    const rows = [["Front", "Back"].map(cell).join(",")];
+    (kit.flashcards.items || []).forEach((card) => {
+      rows.push([cell(card.front), cell(card.back)].join(","));
+    });
+    return `\uFEFF${rows.join("\r\n")}\r\n`;
+  }
+
   /**
    * Flip the visible card by toggling a class on the live element instead of
    * rebuilding the view — that is what lets the 3D flip animate.
@@ -4707,6 +4734,14 @@ Active transport is the movement of substances against a concentration gradient,
         }
         break;
       }
+      case "download-flashcards-csv": {
+        const kit = store.getKit(id);
+        if (kit && kit.flashcards) {
+          download(safeFileName(kit.name + " cards", "csv"), flashcardsToCsv(kit), "text/csv;charset=utf-8");
+          toast("CSV exported — import it into Anki or Quizlet.", "success");
+        }
+        break;
+      }
       case "flip-card":
         flipCard();
         break;
@@ -4874,6 +4909,7 @@ Active transport is the movement of substances against a concentration gradient,
       }
       case "review-hardest": {
         const kit = store.getKit(route.id);
+        flashState.unseenMode = false;
         const hardest = kit ? hardestCards(kit) : [];
         if (!hardest.length) {
           toast("No tricky cards yet — rate a few first.", "info");
@@ -4890,7 +4926,20 @@ Active transport is the movement of substances against a concentration gradient,
         toast(`Practising your ${plural(hardest.length, "trickiest card")}.`, "info");
         break;
       }
+      case "review-unseen": {
+        flashState.reviewMode = false;
+        flashState.dueOnly = false;
+        flashState.unseenMode = true;
+        flashState.index = 0;
+        flashState.flipped = false;
+        flashState.finished = false;
+        flashState.showList = false;
+        render();
+        toast("Only cards you have not rated yet.");
+        break;
+      }
       case "review-due": {
+        flashState.unseenMode = false;
         flashState.reviewMode = true;
         flashState.index = 0;
         flashState.flipped = false;
@@ -4901,6 +4950,7 @@ Active transport is the movement of substances against a concentration gradient,
         break;
       }
       case "review-again": {
+        flashState.unseenMode = false;
         flashState.reviewMode = true;
         flashState.index = 0;
         flashState.flipped = false;

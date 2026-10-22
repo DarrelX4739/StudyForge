@@ -54,6 +54,23 @@ const modal = () => window.document.getElementById("modal-root");
     check(`route ${route} renders`, text.length > 40 && !/Something went wrong/i.test(text), `${text.length} chars`);
   }
 
+  // ---------- unseen-only run (fresh deck) ----------
+  window.location.hash = `#/kit/${kit.id}/flashcards`;
+  await wait(150);
+  const unseenBtn = view().querySelector('[data-action="review-unseen"]');
+  check("a fresh deck offers an unseen-only run", Boolean(unseenBtn), unseenBtn ? unseenBtn.textContent : "");
+  if (unseenBtn) {
+    unseenBtn.click();
+    await wait(160);
+    check("unseen-only run shows a card", Boolean(view().querySelector(".flashcard")));
+    check(
+      "unseen-only run covers every card",
+      new RegExp(`Card 1 of ${store.getKit(kit.id).flashcards.items.length}`).test(view().textContent),
+    );
+    view().querySelector('[data-action="restart-cards"]').click();
+    await wait(150);
+  }
+
   // ---------- due panel ----------
   window.location.hash = "#/";
   await wait(120);
@@ -348,6 +365,36 @@ const modal = () => window.document.getElementById("modal-root");
       Boolean(view().querySelector(".typed-verdict.correct")),
       expected ? expected.back.slice(0, 40) : "",
     );
+  }
+
+  // ---------- CSV export + unseen-only run ----------
+  window.location.hash = `#/kit/${kit.id}/flashcards`;
+  await wait(160);
+  const csvBtn = view().querySelector('[data-action="download-flashcards-csv"]');
+  check("deck can export for Anki", Boolean(csvBtn));
+  if (csvBtn) {
+    // Capture what the download helper is handed.
+    const RealBlob = window.Blob;
+    let csvText = "";
+    window.Blob = function (parts, options) {
+      csvText = String((parts && parts[0]) || "");
+      return new RealBlob(parts, options);
+    };
+    const realCreate = window.URL.createObjectURL;
+    window.URL.createObjectURL = () => "blob:stub";
+    csvBtn.click();
+    await wait(120);
+    window.Blob = RealBlob;
+    if (realCreate) window.URL.createObjectURL = realCreate;
+    else delete window.URL.createObjectURL;
+    const rows = csvText.replace(/^\uFEFF/, "").trim().split(/\r?\n/);
+    check("CSV has a header row", rows[0] === '"Front","Back"', rows[0]);
+    check(
+      "CSV has one row per card",
+      rows.length === store.getKit(kit.id).flashcards.items.length + 1,
+      `${rows.length - 1} rows`,
+    );
+    check("CSV quotes every field", rows[1].startsWith('"') && rows[1].includes('","'));
   }
 
   // ---------- printable sheets ----------

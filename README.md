@@ -227,6 +227,9 @@ merged, de-duplicated by prompt and interleaved so the deck is not grouped by re
 - Choose 10, 20, 30 or 40 cards.
 - **Deck summary** when you reach the end: what you know, what is still slipping, and one tap back
   into the cards you missed.
+- **Export for Anki**: the deck as a CSV (`Front`, `Back`) that Anki, Quizlet and Numbers/Excel open
+  straight away.
+- **Unseen-only runs**: a session limited to cards you have never rated.
 - **Type answers** mode: recall the answer from memory, type it and let StudyForge check the wording
   loosely, then rate yourself.
 - **Print deck** produces a clean two-column sheet of every prompt and answer for offline revision.
@@ -439,7 +442,7 @@ npm test
 | `local-engine` | The on-device generator on its own (plain node): guide sections, card quality, four-option questions, seeds and refusals. |
 | `insights` | Progress analytics across attempts, trouble spots, per-question pace, hardest cards, card editing, the review schedule and exam resume. |
 
-All eight suites pass — 259 checks, zero console errors.
+All eight suites pass — 266 checks, zero console errors.
 
 ## Limitations
 
