@@ -59,6 +59,8 @@
         ocrLanguage: "eng",
         ocrScale: 2,
         flashcardStyle: DEFAULT_FLASHCARD_STYLE,
+        // How many days a week the learner aims to study (used on the dashboard).
+        weeklyGoal: 5,
       },
     };
   }
@@ -178,6 +180,10 @@
       flashcardStyle: FLASHCARD_STYLES.includes(settings.flashcardStyle)
         ? settings.flashcardStyle
         : DEFAULT_FLASHCARD_STYLE,
+      weeklyGoal: (() => {
+        const goal = Math.round(Number(settings.weeklyGoal));
+        return Number.isFinite(goal) ? Math.min(7, Math.max(1, goal)) : 5;
+      })(),
     };
     return next;
   }
@@ -876,6 +882,10 @@
       state.settings.ocrLanguage = OCR_LANGUAGES.includes(patch.ocrLanguage) ? patch.ocrLanguage : "eng";
     }
     if ("ocrScale" in patch) state.settings.ocrScale = clampScale(patch.ocrScale);
+    if ("weeklyGoal" in patch) {
+      const goal = Math.round(Number(patch.weeklyGoal));
+      state.settings.weeklyGoal = Number.isFinite(goal) ? Math.min(7, Math.max(1, goal)) : 5;
+    }
     if ("flashcardStyle" in patch) {
       state.settings.flashcardStyle = FLASHCARD_STYLES.includes(patch.flashcardStyle)
         ? patch.flashcardStyle

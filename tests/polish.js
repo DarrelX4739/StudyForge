@@ -187,6 +187,28 @@ const modal = () => window.document.getElementById("modal-root");
     check("Esc leaves focus mode", !window.document.body.classList.contains("doc-focus"));
   }
 
+  // ---------- printable sheets ----------
+  window.location.hash = `#/kit/${kit.id}/flashcards`;
+  await wait(150);
+  const deckPrint = view().querySelector('[data-action="print-deck"]');
+  check("deck has a print button", Boolean(deckPrint));
+  if (deckPrint) {
+    deckPrint.click();
+    await wait(120);
+    const sheet = window.document.getElementById("print-sheet");
+    check("print sheet contains every card", Boolean(sheet) && sheet.querySelectorAll("tbody tr").length === store.getKit(kit.id).flashcards.items.length);
+  }
+  window.location.hash = `#/kit/${kit.id}/questions`;
+  await wait(150);
+  const quizPrint = view().querySelector('[data-action="print-quiz"]');
+  check("quiz has a print button", Boolean(quizPrint));
+  if (quizPrint) {
+    quizPrint.click();
+    await wait(120);
+    const sheet = window.document.getElementById("print-sheet");
+    check("printed quiz includes an answer key", Boolean(sheet) && /Answer key/.test(sheet.textContent));
+  }
+
   // ---------- find in guide ----------
   window.location.hash = `#/kit/${kit.id}/documents`;
   await wait(150);
@@ -245,6 +267,8 @@ const modal = () => window.document.getElementById("modal-root");
   const streak = view().querySelector(".streak-strip");
   check("streak strip renders", Boolean(streak), streak ? streak.textContent.replace(/\s+/g, " ").trim().slice(0, 60) : "");
   check("heat strip has 14 days", view().querySelectorAll(".heat-cell").length === 14);
+  check("weekly goal tracker renders", view().querySelectorAll(".goal-dot").length === 7);
+  check("weekly goal text is shown", /\d+\/\d+ days this week/.test(view().textContent));
   check("activity was recorded", Object.keys(store.get().activity || {}).length >= 1);
 
   // ---------- shortcuts ----------

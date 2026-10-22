@@ -847,6 +847,27 @@
     padding:4px 14px;max-width:max-content;
   }
 
+  /* Printable sheets (decks, papers) */
+  #print-sheet{display:none}
+  @media print{
+    body.print-sheet > *:not(#print-sheet){display:none!important}
+    body.print-sheet #print-sheet{display:block!important;color:#111;background:#fff;padding:0}
+    #print-sheet h1{font-size:1.4rem;margin:0 0 4px}
+    #print-sheet .sheet-note{color:#555;font-size:.8rem;margin:0 0 14px}
+    #print-sheet .sheet-table{width:100%;border-collapse:collapse;font-size:.85rem}
+    #print-sheet .sheet-table th,#print-sheet .sheet-table td{
+      border-bottom:1px solid #ddd;padding:6px 8px;text-align:left;vertical-align:top;
+    }
+    #print-sheet .sheet-table th{font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:#666}
+    #print-sheet td.num{width:28px;color:#888}
+    #print-sheet .sheet-q{margin:0 0 14px;break-inside:avoid}
+    #print-sheet .sheet-q p{margin:0 0 4px}
+    #print-sheet .sheet-options{margin:0 0 0 18px;padding:0}
+    #print-sheet .sheet-lines{height:44px;border-bottom:1px solid #ccc}
+    #print-sheet .sheet-page-break{break-before:page;margin-top:0}
+    #print-sheet .sheet-key{font-size:.85rem;padding-left:20px}
+  }
+
   /* Find in guide */
   .doc-find-wrap{position:relative;display:inline-flex;align-items:center}
   .doc-find-wrap input{
@@ -950,7 +971,18 @@
   .streak-flame{font-size:1.5rem;line-height:1}
   .streak-copy{display:flex;flex-direction:column;gap:2px;min-width:0}
   .streak-copy strong{font-size:.98rem}
-  .heat-strip{display:flex;gap:4px;margin-left:auto}
+  .heat-strip{display:flex;gap:4px}
+  .week-goal{display:flex;flex-direction:column;gap:4px;align-items:flex-end;margin-left:auto}
+  .week-goal-days{display:flex;gap:5px}
+  .goal-dot{
+    width:12px;height:12px;border-radius:50%;background:var(--panel-3);
+    border:1px solid var(--line-2);
+  }
+  .goal-dot.done{background:var(--good);border-color:var(--good)}
+  .goal-dot.today{box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 45%,transparent)}
+  @media (max-width:720px){
+    .week-goal{margin-left:0;align-items:flex-start;width:100%}
+  }
   .heat-cell{width:14px;height:22px;border-radius:4px;background:var(--panel-3);transition:transform .15s ease}
   .heat-cell.level-1{background:color-mix(in srgb,var(--accent) 28%,var(--panel-3))}
   .heat-cell.level-2{background:color-mix(in srgb,var(--accent) 58%,var(--panel-3))}
@@ -1160,14 +1192,14 @@
       done = true;
       console.warn("[StudyForge] " + reason + "; loading the project files directly.");
       [
-        "./src/store.js?v=2026-10-22e",
-        "./src/local.js?v=2026-10-22e",
-        "./src/markdown.js?v=2026-10-22e",
-        "./src/ocr.js?v=2026-10-22e",
-        "./src/ai.js?v=2026-10-22e",
-        "./src/jobs.js?v=2026-10-22e",
-        "./src/ui.js?v=2026-10-22e",
-        "./src/main.js?v=2026-10-22e",
+        "./src/store.js?v=2026-10-22f",
+        "./src/local.js?v=2026-10-22f",
+        "./src/markdown.js?v=2026-10-22f",
+        "./src/ocr.js?v=2026-10-22f",
+        "./src/ai.js?v=2026-10-22f",
+        "./src/jobs.js?v=2026-10-22f",
+        "./src/ui.js?v=2026-10-22f",
+        "./src/main.js?v=2026-10-22f",
       ].forEach(function (src) {
         var script = document.createElement("script");
         script.src = src;

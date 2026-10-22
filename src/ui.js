@@ -840,6 +840,33 @@ Active transport is the movement of substances against a concentration gradient,
       </section>`;
   }
 
+  /** Monday-based week with the days that already have activity on them. */
+  function weekProgress(goal) {
+    const activity = store.get().activity || {};
+    const todayKey = store.dayKey();
+    const now = new Date();
+    const mondayOffset = (now.getDay() + 6) % 7; // Monday = 0
+    const days = [];
+    let done = 0;
+    for (let index = 0; index < 7; index += 1) {
+      const date = new Date(now.getTime() + (index - mondayOffset) * 86400000);
+      const key = store.dayKey(date);
+      const entry = activity[key] || {};
+      const studied = Object.values(entry).some((value) => Number(value) > 0);
+      if (studied) done += 1;
+      days.push({
+        key,
+        label: date.toLocaleDateString(undefined, { weekday: "long" }),
+        done: studied,
+        today: key === todayKey,
+        future: key > todayKey,
+      });
+    }
+    // Days still to come this week count towards the goal, past ones do not.
+    const remaining = days.filter((day) => day.future).length;
+    return { done, days, goal, remaining, onTrack: done + remaining >= goal };
+  }
+
   /** Streak + a two-week heat strip, so momentum is visible at a glance. */
   function renderStreakStrip(state) {
     if (!state.kits.length || query) return "";
@@ -856,6 +883,8 @@ Active transport is the movement of substances against a concentration gradient,
           </div>
         </section>`;
     }
+    const goal = store.getSettings().weeklyGoal || 5;
+    const week = weekProgress(goal);
     return `
       <section class="streak-strip">
         <span class="streak-flame">${streak.days ? "🔥" : "🌱"}</span>
@@ -866,6 +895,17 @@ Active transport is the movement of substances against a concentration gradient,
               ? "Today counts. Keep it going."
               : "Study today to keep the streak alive."
           }${streak.best > streak.current ? ` · best ${streak.best}` : ""}</span>
+        </div>
+        <div class="week-goal" title="${week.done} of ${goal} days studied this week">
+          <span class="week-goal-days">${week.days
+            .map(
+              (day) =>
+                `<span class="goal-dot ${day.done ? "done" : ""} ${day.today ? "today" : ""}" title="${esc(day.label)}${
+                  day.done ? " · studied" : ""
+                }"></span>`,
+            )
+            .join("")}</span>
+          <span class="muted tiny">${week.done}/${goal} days this week</span>
         </div>
         <div class="heat-strip" role="img" aria-label="Study activity over the last 14 days">
           ${days
@@ -1224,7 +1264,8 @@ Active transport is the movement of substances against a concentration gradient,
             }</button>
             ${
               quiz
-                ? `<button class="btn small" data-action="download-quiz" data-id="${esc(kit.id)}">Download .md</button>`
+                ? `<button class="btn small" data-action="print-quiz" data-id="${esc(kit.id)}">Print</button>
+                 <button class="btn small" data-action="download-quiz" data-id="${esc(kit.id)}">Download .md</button>`
                 : ""
             }
           </div>
@@ -1767,7 +1808,8 @@ Active transport is the movement of substances against a concentration gradient,
             }</button>
             ${
               cards
-                ? `<button class="btn small" data-action="download-flashcards" data-id="${esc(kit.id)}">Download .md</button>`
+                ? `<button class="btn small" data-action="print-deck" data-id="${esc(kit.id)}">Print deck</button>
+                   <button class="btn small" data-action="download-flashcards" data-id="${esc(kit.id)}">Download .md</button>`
                 : ""
             }
           </div>
@@ -2626,6 +2668,7 @@ Active transport is the movement of substances against a concentration gradient,
       ocrLanguage: settings.ocrLanguage,
       ocrScale: settings.ocrScale,
       flashcardStyle: settings.flashcardStyle,
+      weeklyGoal: settings.weeklyGoal || 5,
       savedModel: settings.model,
     };
   }
@@ -2879,6 +2922,18 @@ Active transport is the movement of substances against a concentration gradient,
             </div>
           </div>
           <div class="field">
+            <label for="set-goal">Weekly study goal</label>
+            <select id="set-goal">
+              ${[2, 3, 4, 5, 6, 7]
+                .map(
+                  (value) =>
+                    `<option value="${value}" ${Number(draft.weeklyGoal) === value ? "selected" : ""}>${value} days a week</option>`,
+                )
+                .join("")}
+            </select>
+            <span class="hint">Shown as a week tracker on the dashboard.</span>
+          </div>
+          <div class="field">
             <label for="set-cards">Default flashcard style</label>
             <select id="set-cards">
               <option value="vocab" ${draft.flashcardStyle === "vocab" ? "selected" : ""}>Vocabulary &amp; concepts — term on the front</option>
@@ -3031,6 +3086,7 @@ Active transport is the movement of substances against a concentration gradient,
           ocrLanguage: root.querySelector("#set-lang").value,
           ocrScale: Number(root.querySelector("#set-scale").value),
           flashcardStyle: root.querySelector("#set-cards").value,
+          weeklyGoal: Number(root.querySelector("#set-goal").value),
         });
         renderProviderBadge();
         toast(
@@ -3694,6 +3750,86 @@ Active transport is the movement of substances against a concentration gradient,
     }
   }
 
+  /**
+   * Print a clean sheet (deck, paper, answer key) instead of whatever is on
+   * screen. The sheet lives outside the app shell so print styles can show it
+   * alone, and it is removed again afterwards.
+   */
+  function printSheet(title, html) {
+    if (typeof window.print !== "function") {
+      toast("This browser cannot print.", "error");
+      return;
+    }
+    const existing = document.getElementById("print-sheet");
+    if (existing) existing.remove();
+    const sheet = document.createElement("div");
+    sheet.id = "print-sheet";
+    sheet.innerHTML = `<h1>${esc(title)}</h1>${html}`;
+    document.body.appendChild(sheet);
+    document.body.classList.add("print-sheet");
+    const cleanup = () => {
+      const node = document.getElementById("print-sheet");
+      if (node) node.remove();
+      document.body.classList.remove("print-sheet");
+      window.removeEventListener("afterprint", cleanup);
+    };
+    window.addEventListener("afterprint", cleanup);
+    setTimeout(() => {
+      window.print();
+      setTimeout(cleanup, 1500);
+    }, 40);
+  }
+
+  function printDeck(kit) {
+    const cards = (kit.flashcards && kit.flashcards.items) || [];
+    if (!cards.length) return;
+    const rows = cards
+      .map(
+        (card, index) =>
+          `<tr><td class="num">${index + 1}</td><td class="front">${esc(card.front)}</td><td class="back">${esc(
+            card.back,
+          )}</td></tr>`,
+      )
+      .join("");
+    printSheet(
+      `${kit.name} — flashcards`,
+      `<p class="sheet-note">${cards.length} cards. Fold or cover the right column to test yourself.</p>
+       <table class="sheet-table"><thead><tr><th>#</th><th>Prompt</th><th>Answer</th></tr></thead><tbody>${rows}</tbody></table>`,
+    );
+  }
+
+  function printQuiz(kit) {
+    const items = (kit.quiz && kit.quiz.items) || [];
+    if (!items.length) return;
+    const questions = items
+      .map(
+        (item, index) => `
+          <div class="sheet-q">
+            <p><strong>${index + 1}.</strong> ${esc(item.question)}</p>
+            ${
+              item.type === "mcq"
+                ? `<ol class="sheet-options" type="A">${item.options.map((option) => `<li>${esc(option)}</li>`).join("")}</ol>`
+                : `<div class="sheet-lines"></div>`
+            }
+          </div>`,
+      )
+      .join("");
+    const key = items
+      .map(
+        (item, index) =>
+          `<li><strong>${index + 1}.</strong> ${
+            item.type === "mcq"
+              ? `${String.fromCharCode(65 + item.answerIndex)} — ${esc(item.options[item.answerIndex])}`
+              : esc(item.answer)
+          }</li>`,
+      )
+      .join("");
+    printSheet(
+      `${kit.name} — quiz`,
+      `${questions}<h2 class="sheet-page-break">Answer key</h2><ol class="sheet-key">${key}</ol>`,
+    );
+  }
+
   /** A plain report of every attempt, for keeping notes outside the app. */
   function resultsToMarkdown(kit) {
     const attempts = (kit.quiz && kit.quiz.attempts) || [];
@@ -4192,6 +4328,16 @@ Active transport is the movement of substances against a concentration gradient,
         } else {
           submitExam("manual");
         }
+        break;
+      }
+      case "print-quiz": {
+        const kit = store.getKit(id);
+        if (kit) printQuiz(kit);
+        break;
+      }
+      case "print-deck": {
+        const kit = store.getKit(id);
+        if (kit) printDeck(kit);
         break;
       }
       case "download-results": {

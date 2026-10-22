@@ -87,6 +87,18 @@ const modal = () => window.document.getElementById("modal-root");
     JSON.stringify(store.getSettings().providerKeys),
   );
 
+  // ---------- weekly goal ----------
+  window.document.querySelector("#btn-settings").click();
+  await wait(100);
+  const goalSelect = modal().querySelector("#set-goal");
+  check("weekly goal control exists", Boolean(goalSelect), goalSelect ? goalSelect.options.length + " options" : "");
+  if (goalSelect) {
+    goalSelect.value = "3";
+    modal().querySelector("[data-confirm]").click();
+    await wait(150);
+    check("weekly goal saved", store.getSettings().weeklyGoal === 3, String(store.getSettings().weeklyGoal));
+  }
+
   // ---------- search ----------
   view().querySelector('[data-action="load-demo"]').click();
   await wait(200);
