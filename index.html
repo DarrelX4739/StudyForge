@@ -778,6 +778,19 @@
   }
   .doc-toc a:hover{color:var(--accent);border-left-color:var(--accent)}
 
+  /* Reading comfort */
+  .doc-read-controls{margin-top:8px;justify-content:flex-end}
+  .doc-read-controls .icon-btn.small{width:30px;height:30px;font-size:.8rem;font-weight:650}
+  body.doc-focus #sidebar,body.doc-focus #topbar,body.doc-focus .doc-side,body.doc-focus .doc-toc{display:none!important}
+  body.doc-focus .app{grid-template-columns:1fr}
+  body.doc-focus .view{max-width:900px;margin:0 auto;padding:40px 24px 120px}
+  body.doc-focus .panel{border:0;box-shadow:none;background:transparent}
+  body.doc-focus .doc-layout{grid-template-columns:1fr}
+  body.doc-focus .doc-body{max-width:none}
+  @media print{
+    body.doc-focus #sidebar,body.doc-focus #topbar{display:none}
+  }
+
   /* Inline text button */
   .link-btn{
     font:inherit;font-size:inherit;background:none;border:0;padding:0;color:var(--accent);

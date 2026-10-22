@@ -45,6 +45,23 @@
   // Read-aloud state for the study guide (uses the browser's own voices).
   let speechState = { speaking: false, resourceId: null };
 
+  // Reading comfort: text size (remembered) and a distraction-free mode.
+  const DOC_SIZES = [0.88, 0.96, 1.06, 1.18];
+  function readDocSize() {
+    const stored = Number(localStorage.getItem("studyforge.docsize"));
+    return DOC_SIZES.includes(stored) ? stored : 0.96;
+  }
+  function setDocSize(size) {
+    const clamped = Math.min(Math.max(size, DOC_SIZES[0]), DOC_SIZES[DOC_SIZES.length - 1]);
+    try {
+      localStorage.setItem("studyforge.docsize", String(clamped));
+    } catch (error) {
+      /* private mode */
+    }
+    const body = els.view.querySelector("[data-doc-body]");
+    if (body) body.style.fontSize = `${clamped}rem`;
+  }
+
   // Quiz run. One question at a time: the answer is locked and marked the
   // moment "Next" is pressed, and everything is saved when the quiz is
   // submitted at the end.
@@ -279,6 +296,10 @@
 
   function render() {
     parseRoute();
+    // Focus mode only makes sense while reading a guide.
+    if (document.body.classList.contains("doc-focus") && !(route.name === "kit" && route.tab === "documents")) {
+      document.body.classList.remove("doc-focus");
+    }
     const snapshot = captureDrafts();
     els.view.innerHTML = "";
 
@@ -1025,6 +1046,12 @@ Active transport is the movement of substances against a concentration gradient,
               <button class="btn small" data-action="copy-doc" data-id="${esc(selected.id)}">Copy</button>
               <button class="btn small" data-action="download-doc" data-id="${esc(selected.id)}">Download .md</button>
             </div>
+            <div class="row tight doc-read-controls">
+              <span class="muted tiny">Text</span>
+              <button class="icon-btn small" data-action="doc-smaller" title="Smaller text" aria-label="Smaller text">A−</button>
+              <button class="icon-btn small" data-action="doc-bigger" title="Bigger text" aria-label="Bigger text">A+</button>
+              <button class="btn small ghost" data-action="doc-focus" title="Hide everything but the guide">Focus</button>
+            </div>
           </div>
           ${
             headings.length > 1
@@ -1039,7 +1066,7 @@ Active transport is the movement of substances against a concentration gradient,
                 </nav>`
               : ""
           }
-          <article class="md" data-doc-body>${md.render(selected.document)}</article>
+          <article class="md" data-doc-body style="font-size:${readDocSize()}rem">${md.render(selected.document)}</article>
         </section>
       </div>`;
   }
@@ -3452,6 +3479,19 @@ Active transport is the movement of substances against a concentration gradient,
         startSpeech(resource);
         break;
       }
+      case "doc-bigger":
+        setDocSize(readDocSize() + 0.1);
+        break;
+      case "doc-smaller":
+        setDocSize(readDocSize() - 0.1);
+        break;
+      case "doc-focus": {
+        document.body.classList.toggle("doc-focus");
+        if (document.body.classList.contains("doc-focus")) {
+          toast("Focus mode — press Esc to bring the app back.", "info");
+        }
+        break;
+      }
       case "print-doc": {
         els.view.classList.add("printing");
         setTimeout(() => {
@@ -4000,6 +4040,7 @@ Active transport is the movement of substances against a concentration gradient,
       }
       if (event.key === "Escape") {
         document.body.classList.remove("nav-open");
+        if (document.body.classList.contains("doc-focus")) document.body.classList.remove("doc-focus");
       }
       if (route.name !== "kit" || route.tab !== "documents") stopSpeech();
     });

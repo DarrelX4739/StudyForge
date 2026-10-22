@@ -161,6 +161,32 @@ const modal = () => window.document.getElementById("modal-root");
   await wait(120);
   check("dashboard counts the attempt", /Quiz attempts/.test(view().textContent));
 
+  // ---------- reading controls ----------
+  window.location.hash = `#/kit/${kit.id}/documents`;
+  await wait(150);
+  const docBody = view().querySelector("[data-doc-body]");
+  check("study guide renders", Boolean(docBody));
+  const bigger = view().querySelector('[data-action="doc-bigger"]');
+  const smaller = view().querySelector('[data-action="doc-smaller"]');
+  check("reading-size controls exist", Boolean(bigger && smaller));
+  if (bigger) {
+    const before = parseFloat(docBody.style.fontSize);
+    bigger.click();
+    await wait(60);
+    check("bigger text takes effect", parseFloat(view().querySelector("[data-doc-body]").style.fontSize) > before);
+    smaller.click();
+    await wait(60);
+  }
+  const focus = view().querySelector('[data-action="doc-focus"]');
+  if (focus) {
+    focus.click();
+    await wait(60);
+    check("focus mode hides the chrome", window.document.body.classList.contains("doc-focus"));
+    window.document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await wait(60);
+    check("Esc leaves focus mode", !window.document.body.classList.contains("doc-focus"));
+  }
+
   // ---------- attempt review ----------
   window.location.hash = `#/kit/${kit.id}/questions`;
   await wait(120);

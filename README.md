@@ -144,6 +144,8 @@ sections, each of which becomes part of one complete Markdown study document.
 - Table of contents generated from the headings, with jump links.
 - Copy, download as `.md`, **Print** (prints the guide alone, not the app chrome), or **Listen** —
   the browser reads the guide aloud, offline, with no key.
+- Reading controls: **A− / A+** for text size (remembered) and **Focus** to hide the whole app except
+  the guide (Esc brings it back).
 - The document is saved to `localStorage`; **the uploaded file and its raw extracted text are not**.
 
 ### Quiz (per study kit)
