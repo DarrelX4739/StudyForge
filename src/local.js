@@ -79,6 +79,10 @@
       .map((word) => word.replace(/(ing|ies|ed|es|s)$/, ""));
   }
 
+  function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
   function titleCase(term) {
     return String(term || "")
       .trim()
@@ -197,8 +201,16 @@
       if (REJECT_TERM.test(cleanTermValue)) return;
       if (/[.!?]/.test(cleanTermValue)) return;
       if (definitionScore(cleanTermValue, body) < 0) return;
+      // "Carbon dioxide and water" is a list, not a term.
+      if (/\band\b/i.test(cleanTermValue)) return;
+      // A definition that opens with a participle ("affected by…") reads badly.
+      if (/^(affected|produced|used|found|caused|measured|released|absorbed|made|taken|needed|required)\b/i.test(body)) return;
       const key = cleanTermValue.toLowerCase();
       if (seen.has(key)) return;
+      // Keep the shortest form of a term: "enzymes" beats "enzyme activity".
+      for (const existing of seen) {
+        if (key.startsWith(existing + " ") || existing.startsWith(key + " ")) return;
+      }
       // One entry per head noun: "enzyme" wins over "enzyme activity".
       const head = key.split(/\s+/).pop();
       if (heads.has(head) && key.split(/\s+/).length > 1) return;
@@ -464,7 +476,13 @@
       }
       for (const item of cloze) {
         if (cards.length >= total) break;
-        add(item.answer, item.sentence);
+        // Only when the answer reads as a real term (a proper noun in the source);
+        // "energy" or "water" makes a confusing card front.
+        const front = String(item.answer);
+        const looksLikeTerm =
+          front.includes(" ") || new RegExp(`\\b${escapeRegExp(front.slice(0, 1).toUpperCase() + front.slice(1))}\\b`).test(item.sentence);
+        if (!looksLikeTerm) continue;
+        add(front, item.sentence);
       }
     }
 
@@ -472,7 +490,10 @@
     for (const sentence of keySentences(text, total * 2)) {
       if (cards.length >= total) break;
       const match = sentence.match(/^([A-Z][\w'’\- ]{2,40}?)\s+(?:is|are|was|were|means)\s+(.{15,})$/);
-      if (match) add(match[1], match[2]);
+      if (!match) continue;
+      if (/\band\b/i.test(match[1])) continue;
+      if (/^(affected|produced|used|found|caused|measured|released|absorbed|made|taken|needed|required)\b/i.test(match[2])) continue;
+      add(match[1], match[2]);
     }
 
     if (!cards.length) {

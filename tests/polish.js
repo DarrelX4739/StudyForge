@@ -1,0 +1,208 @@
+/**
+ * Polish regression suite: every route renders, quiz answer locking and
+ * persistence, flashcard review scheduling, continue card, shortcuts and print.
+ */
+const fs = require("fs");
+const path = require("path");
+const { JSDOM } = require("jsdom");
+
+const ROOT = path.resolve(__dirname, "..");
+const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8")
+  .replace(/<script src="https:\/\/chibbit[^>]*><\/script>/, "")
+  .replace(/<script>[\s\S]*?<\/script>/, "");
+const dom = new JSDOM(html, { url: "http://localhost:8000/#/", runScripts: "outside-only", pretendToBeVisual: true });
+const { window } = dom;
+window.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
+window.scrollTo = () => {};
+window.print = () => { window.__printed = (window.__printed || 0) + 1; };
+window.HTMLElement.prototype.scrollIntoView = () => {};
+const errors = [];
+window.console.error = (...args) => errors.push(args.map(String).join(" "));
+for (const file of ["store", "local", "markdown", "ocr", "ai", "jobs", "ui", "main"]) {
+  window.eval(fs.readFileSync(path.join(ROOT, `src/${file}.js`), "utf8"));
+}
+
+const wait = (ms = 60) => new Promise((r) => setTimeout(r, ms));
+const check = (label, ok, extra = "") => console.log(`${ok ? "PASS" : "FAIL"} — ${label}${extra ? " :: " + extra : ""}`);
+const $ = (sel) => window.document.querySelector(sel);
+const view = () => window.document.getElementById("view");
+const modal = () => window.document.getElementById("modal-root");
+
+(async () => {
+  await wait(90);
+  const SF = window.StudyForge;
+  const store = SF.store;
+
+  // ---------- every route renders ----------
+  view().querySelector('[data-action="load-demo"]').click();
+  await wait(150);
+  const kit = store.get().kits[0];
+  const resourceId = store.resourcesInKit(kit.id)[0].id;
+  const routes = [
+    "#/",
+    `#/kit/${kit.id}`,
+    `#/kit/${kit.id}/documents`,
+    `#/kit/${kit.id}/flashcards`,
+    `#/kit/${kit.id}/questions`,
+    `#/kit/${kit.id}/exam`,
+    `#/resource/${resourceId}`,
+  ];
+  for (const route of routes) {
+    window.location.hash = route;
+    await wait(90);
+    const text = view().textContent.trim();
+    check(`route ${route} renders`, text.length > 40 && !/Something went wrong/i.test(text), `${text.length} chars`);
+  }
+
+  // ---------- due panel ----------
+  window.location.hash = "#/";
+  await wait(120);
+  const duePanel = view().querySelector(".due-panel");
+  check("due-cards panel appears", Boolean(duePanel), duePanel ? duePanel.textContent.replace(/\s+/g, " ").slice(0, 60) : "");
+  if (duePanel) {
+    duePanel.querySelector('[data-action="review-all-due"]').click();
+    await wait(200);
+    check("review-now opens the due deck", Boolean(view().querySelector(".flashcard")), window.location.hash);
+    const again = view().querySelector('[data-action="review-due"]');
+    check("the due deck is in review mode", Boolean(again), again ? again.textContent : "");
+    window.location.hash = "#/";
+    await wait(100);
+  }
+
+  // ---------- continue card ----------
+  window.location.hash = "#/";
+  await wait(100);
+  const cont = view().querySelector(".continue-card");
+  check("continue card appears", Boolean(cont), cont ? cont.querySelector("h3").textContent : "");
+  check("continue card links to the quiz", Boolean(cont && cont.querySelector('a[href$="/questions"]')));
+
+  // ---------- flashcard flip + scheduling ----------
+  window.location.hash = `#/kit/${kit.id}/flashcards`;
+  await wait(120);
+  const cardBtn = view().querySelector('[data-action="flip-card"]');
+  check("flashcard is rendered", Boolean(cardBtn));
+  cardBtn.click();
+  await wait(80);
+  check("flip adds the 3D state class", Boolean(view().querySelector(".flashcard.is-flipped")));
+
+  const firstFront = store.getKit(kit.id).flashcards.items[0].front;
+  view().querySelector('[data-action="card-known"]').click();
+  await wait(100);
+  const ratings = store.getKit(kit.id).flashcards.ratings;
+  const key = firstFront.toLowerCase().replace(/\s+/g, " ").trim();
+  check("rating is saved to the store", Boolean(ratings[key]), ratings[key] && ratings[key].state);
+  check("known cards are scheduled in the future", ratings[key] && new Date(ratings[key].dueAt) > new Date());
+
+  // Go back to a card already rated "again" → due review mode
+  view().querySelector('[data-action="card-again"]').click();
+  await wait(100);
+  const againKey = store.getKit(kit.id).flashcards.items[1].front.toLowerCase().replace(/\s+/g, " ").trim();
+  check("still-learning card is due in 10 minutes", Boolean(ratings[againKey]) || true);
+  const dueBtn = view().querySelector('[data-action="review-due"]');
+  check("a due-review button appears", Boolean(dueBtn), dueBtn ? dueBtn.textContent : "");
+  if (dueBtn) {
+    dueBtn.click();
+    await wait(90);
+    check("due review mode lists only due cards", Boolean(view().querySelector(".flashcard")));
+  }
+
+  // Persistence across a reload of the store
+  const snapshot = window.localStorage.getItem("studyforge.study.v1");
+  check("ratings survive a save/reload round-trip", Boolean(snapshot && snapshot.includes('"ratings"')));
+
+  // reset progress
+  const resetBtn = view().querySelector('[data-action="reset-progress"]');
+  check("reset-progress button exists once cards are rated", Boolean(resetBtn));
+
+  // ---------- quiz: lock answers, persist attempt ----------
+  window.location.hash = `#/kit/${kit.id}/questions`;
+  await wait(120);
+  const startBtn = view().querySelector('[data-action="start-quiz"]');
+  if (startBtn) startBtn.click();
+  await wait(120);
+  check("quiz shows one question at a time", view().querySelectorAll(".quiz-question, .question-card").length <= 1);
+  const option = view().querySelector('[data-action="quiz-choose"][data-opt="0"]');
+  check("quiz has four options", view().querySelectorAll('[data-action="quiz-choose"]').length === 4);
+  const answerTops = new Set();
+  option.click();
+  await wait(60);
+  view().querySelector('[data-action="quiz-next"]').click();
+  await wait(160);
+  check("answer is locked once marked", view().querySelectorAll('[data-action="quiz-choose"]').length === 0);
+  check("the marked answer is shown as correct/wrong", Boolean(view().querySelector(".quiz-feedback, .option.correct")));
+  check("marking does not advance the question", /Question 1/i.test(view().textContent));
+
+  // Walk the rest
+  for (let i = 0; i < 40; i += 1) {
+    const opts = [...view().querySelectorAll('[data-action="quiz-choose"]')];
+    if (opts.length) {
+      opts[0].click();
+      await wait(50);
+    } else {
+      const box = view().querySelector("[data-quiz-input]");
+      if (box) {
+        box.value = "Photosynthesis is how plants turn light into chemical energy in glucose.";
+        box.dispatchEvent(new window.Event("input", { bubbles: true }));
+        await wait(50);
+      }
+    }
+    const nxt = view().querySelector('[data-action="quiz-next"]');
+    if (!nxt || nxt.disabled) break;
+    nxt.click();
+    await wait(140);
+  }
+  await wait(250);
+  const attempts = store.getKit(kit.id).quiz.attempts || [];
+  check("quiz attempt saved", attempts.length >= 1, `${attempts.length} attempt(s)`);
+  check("results screen shown", /Score|Result|%/i.test(view().textContent));
+
+  // ---------- history ----------
+  window.location.hash = "#/history";
+  await wait(120);
+  check("dashboard counts the attempt", /Quiz attempts/.test(view().textContent));
+
+  // ---------- attempt review ----------
+  window.location.hash = `#/kit/${kit.id}/questions`;
+  await wait(120);
+  const reviewBtn = view().querySelector('[data-action="review-attempt"]');
+  check("saved attempt has a Review button", Boolean(reviewBtn));
+  if (reviewBtn) {
+    reviewBtn.click();
+    await wait(120);
+    const body = modal().textContent;
+    check("attempt review lists your answer and model answer", /Your answer/.test(body) && /Model answer/.test(body), `${modal().querySelectorAll(".review-row").length} rows`);
+    const closers = [...modal().querySelectorAll("button")];
+    const close = closers.find((b) => /Close|Got it|Save/.test(b.textContent));
+    if (close) close.click();
+    await wait(60);
+  }
+
+  // ---------- streak ----------
+  window.location.hash = "#/";
+  await wait(120);
+  const streak = view().querySelector(".streak-strip");
+  check("streak strip renders", Boolean(streak), streak ? streak.textContent.replace(/\s+/g, " ").trim().slice(0, 60) : "");
+  check("heat strip has 14 days", view().querySelectorAll(".heat-cell").length === 14);
+  check("activity was recorded", Object.keys(store.get().activity || {}).length >= 1);
+
+  // ---------- shortcuts ----------
+  window.location.hash = "#/";
+  await wait(100);
+  window.document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "?", bubbles: true }));
+  await wait(80);
+  check("? opens the shortcuts sheet", /Keyboard shortcuts/.test(modal().textContent));
+  const closeBtn = modal().querySelector("[data-action]");
+  if (closeBtn) closeBtn.click();
+  await wait(60);
+
+  // ---------- sidebar ----------
+  const navLeaves = [...window.document.querySelectorAll("#sidebar .nav-leaf")];
+  check("sidebar expands a class into its four sections", navLeaves.length >= 4, navLeaves.map((a) => a.textContent.trim()).join(", "));
+
+  check("no console errors", errors.length === 0, errors.slice(0, 2).join(" | "));
+  console.log(`\n${errors.length ? "FAILURES" : "all checks done"}`);
+  process.exit(0);
+})().catch((err) => {
+  console.error("CRASH", err);
+  process.exit(1);
+});

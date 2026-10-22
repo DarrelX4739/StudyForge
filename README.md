@@ -367,6 +367,27 @@ Routes:
 
 The Worker never stores or logs the key — it forwards the caller's `Authorization` header.
 
+## Tests
+
+The browser suites boot the real `index.html` + `src/*.js` in jsdom, so they catch wiring bugs a unit
+test would miss:
+
+```bash
+cd tests
+npm install
+npm test
+```
+
+| Suite | Covers |
+| --- | --- |
+| `local-flow` | The whole on-device pipeline: paste text → guide → quiz → cards → exam, plus a full quiz play-through. |
+| `crud` | Creating classes and kits, generating from pasted notes, running an exam, backup export/import, deletion. |
+| `polish` | Every route, answer locking, attempt persistence and review, card scheduling, streaks, shortcuts. |
+| `settings` | Provider switching, per-provider keys, search, theme, sidebar. |
+| `ui-provider` | Provider picker, stubbed Gemini/OpenRouter/custom requests, sample kit, missed-question retry, review mode. |
+
+All five suites pass with zero console errors.
+
 ## Limitations
 
 - `localStorage` is per-browser and per-origin; clearing site data deletes your library. Export backups.

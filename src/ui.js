@@ -2176,7 +2176,7 @@ Active transport is the movement of substances against a concentration gradient,
 
     return `
       ${
-        info.needsKey
+        true
           ? `<div class="field">
               <label for="set-key">${esc(info.keyLabel)}</label>
               <input id="set-key" type="password" autocomplete="off" spellcheck="false"
@@ -3853,7 +3853,19 @@ Active transport is the movement of substances against a concentration gradient,
       document.body.classList.remove("nav-open");
       render();
     });
-    store.subscribe(scheduleRender);
+    let storageWarned = false;
+    store.subscribe((state, storageError) => {
+      // Running out of localStorage must never fail silently.
+      if (storageError && !storageWarned) {
+        storageWarned = true;
+        toast(
+          "This browser's storage is full, so changes may not be saved. Export a backup and delete old kits.",
+          "error",
+        );
+      }
+      if (!storageError) storageWarned = false;
+      scheduleRender();
+    });
 
     let lastSeenJob = null;
     jobs.subscribe((current) => {

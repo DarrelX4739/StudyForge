@@ -818,9 +818,12 @@
   const getSettings = () => ({ ...state.settings });
   const getApiKey = () => state.settings.apiKey || "";
   const getProvider = () => state.settings.provider || DEFAULT_PROVIDER;
-  /** The key for the active provider (falls back to the stored provider key). */
-  const getProviderKey = () => {
-    const provider = state.settings.provider || DEFAULT_PROVIDER;
+  /**
+   * The key for a provider — the active one by default, or any by id.
+   * Falls back to the legacy single apiKey for older saved data.
+   */
+  const getProviderKey = (providerId) => {
+    const provider = providerId || state.settings.provider || DEFAULT_PROVIDER;
     if (provider === "local") return "";
     return (state.settings.providerKeys && state.settings.providerKeys[provider]) || state.settings.apiKey || "";
   };
