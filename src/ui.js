@@ -897,7 +897,7 @@ Active transport is the movement of substances against a concentration gradient,
           <div class="row">
             <button class="btn" data-action="add-text">Add pasted text</button>
           </div>
-          <p class="muted tiny">AI settings: ${esc(settings.model)} · ${esc(settings.ocrLanguage)} OCR · ${settings.ocrScale}× render. ${store.getApiKey() ? "NIM key saved." : '<span class="danger">No NIM key yet.</span>'}</p>
+          <p class="muted tiny">Generating with ${esc(StudyForge.ai.providerLabel())}. ${esc(settings.ocrLanguage)} OCR · ${settings.ocrScale}× render. <button class="link-btn" data-action="open-settings">Change engine</button></p>
         </section>
 
         <section class="panel">
@@ -3005,6 +3005,31 @@ Active transport is the movement of substances against a concentration gradient,
     toast("Pasted text queued for processing.");
   }
 
+  /**
+   * With the on-device engine, a fresh study document is enough to build the
+   * rest of the kit: cards and a quiz appear without another click. Never does
+   * this with an AI provider — that would spend someone's quota unasked.
+   */
+  function autoForgeAfterDocument(current, previous) {
+    if (!previous || current === previous) return;
+    const finished = jobs.getLast();
+    if (!finished || finished.status !== "done" || finished.autoForged) return;
+    if (finished.kind !== "text" && finished.kind !== "pdf") return;
+    if (StudyForge.ai.providerId() !== "local") return;
+    if (!finished.kitId) return;
+    const kit = store.getKit(finished.kitId);
+    if (!kit) return;
+    const documents = store.resourcesInKit(kit.id).filter((resource) => resource.document);
+    if (!documents.length) return;
+    finished.autoForged = true;
+    if (!kit.flashcards) {
+      jobs.makeFlashcards(kit, 20, store.getSettings().flashcardStyle || "vocab");
+    }
+    if (!kit.quiz) {
+      jobs.makeQuiz(kit, 10, "");
+    }
+  }
+
   function download(filename, content, type = "text/plain;charset=utf-8") {
     const blob = new Blob([content], { type });
     const url = URL.createObjectURL(blob);
@@ -3637,6 +3662,7 @@ Active transport is the movement of substances against a concentration gradient,
     let lastSeenJob = null;
     jobs.subscribe((current) => {
       renderJobBar();
+      autoForgeAfterDocument(current, lastSeenJob);
       if (lastSeenJob && current !== lastSeenJob) {
         const finished = jobs.getLast();
         if (finished) {

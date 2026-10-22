@@ -873,6 +873,7 @@
     return enqueue({
       kind: "pdf",
       resourceId: resource.id,
+      kitId: resource.kitId,
       resourceName: resource.name,
       subject: (StudyForge.store.getKit(resource.kitId) || {}).subject || "",
       file,
@@ -884,6 +885,7 @@
     return enqueue({
       kind: "text",
       resourceId: resource.id,
+      kitId: resource.kitId,
       resourceName: resource.name,
       subject: (StudyForge.store.getKit(resource.kitId) || {}).subject || "",
       text,

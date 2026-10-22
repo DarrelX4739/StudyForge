@@ -17,7 +17,8 @@ No build step, no install, no server of your own. Your data stays in your browse
 Open <https://darrelx4739.github.io/StudyForge/> and start:
 
 1. Click **Try a sample kit** to see a finished kit, or **New study kit** and add a PDF or paste notes.
-2. Study guide, flashcards and quiz are generated straight away on device.
+2. Study guide, flashcards and quiz are generated straight away on device — the guide when the
+   resource finishes, then cards and a quiz automatically.
 3. Optional: **Settings** adds an AI provider key (Gemini, OpenRouter, a self-hosted relay or NVIDIA
    through the bundled Worker) for model-written study material and AI marking of short answers.
 
