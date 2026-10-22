@@ -95,6 +95,7 @@ async function playQuiz({ pick = 0 } = {}) {
     check("insights show the attempt count", /2 Attempts/.test(insights.textContent) || /2\s*Attempts/.test(insights.textContent));
     check("sparkline drawn", Boolean(insights.querySelector(".spark polyline")));
     check("type breakdown shown", insights.querySelectorAll(".insight-row").length >= 1);
+    check("results can be downloaded", Boolean(insights.querySelector('[data-action="download-results"]')));
     const pace = insights.querySelectorAll(".insight-stat")[3];
     check("pace tile has a value", /\d+s/.test(pace.textContent), pace.textContent.replace(/\s+/g, " "));
   }
