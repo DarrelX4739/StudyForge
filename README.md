@@ -96,7 +96,8 @@ A modern, responsive layout with a grouped sidebar:
 - **Rename** kits, edit their subject/focus, move them, delete them.
 - **My notes** on every kit: a scratch pad for what your teacher stressed or what keeps slipping,
   saved with the kit in this browser.
-- **Search** (⌘K / Ctrl-K) matches kit names, subjects, resource names and guide text.
+- **Search** (⌘K / Ctrl-K) matches kit names, subjects, resource names, guide text, flashcard
+  prompts and quiz questions.
 - **Export / Import** a JSON backup of everything.
 - **Shortcuts** (sidebar) or **?** lists every keyboard shortcut: ⌘K search, 1–4 answers,
   Enter to mark, Space to flip, ←/→ cards.

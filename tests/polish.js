@@ -205,6 +205,24 @@ const modal = () => window.document.getElementById("modal-root");
     }
   }
 
+  // ---------- search reaches inside a kit ----------
+  window.location.hash = "#/";
+  await wait(150);
+  const searchBox = window.document.querySelector("#search");
+  const cardWord =
+    store
+      .getKit(kit.id)
+      .flashcards.items.map((card) => card.back)
+      .join(" ")
+      .match(/[A-Za-z]{8,}/)[0];
+  searchBox.value = cardWord;
+  searchBox.dispatchEvent(new window.Event("input", { bubbles: true }));
+  await wait(200);
+  check("search matches flashcard answers", view().textContent.includes(kit.name), cardWord);
+  searchBox.value = "";
+  searchBox.dispatchEvent(new window.Event("input", { bubbles: true }));
+  await wait(150);
+
   // ---------- reading controls ----------
   window.location.hash = `#/kit/${kit.id}/documents`;
   await wait(150);

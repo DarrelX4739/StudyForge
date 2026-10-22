@@ -288,6 +288,7 @@
   .stat-value{font-size:1.5rem;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.03em}
   .stat-label{font-size:.75rem;color:var(--muted);font-weight:520}
   .stat.accent .stat-value{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .stat-strip{grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
   @media (max-width:820px){ .stat-strip{grid-template-columns:repeat(2,minmax(0,1fr))} }
 
   /* kit rows (dashboard) */
@@ -1207,14 +1208,14 @@
       done = true;
       console.warn("[StudyForge] " + reason + "; loading the project files directly.");
       [
-        "./src/store.js?v=2026-10-22i",
-        "./src/local.js?v=2026-10-22i",
-        "./src/markdown.js?v=2026-10-22i",
-        "./src/ocr.js?v=2026-10-22i",
-        "./src/ai.js?v=2026-10-22i",
-        "./src/jobs.js?v=2026-10-22i",
-        "./src/ui.js?v=2026-10-22i",
-        "./src/main.js?v=2026-10-22i",
+        "./src/store.js?v=2026-10-22j",
+        "./src/local.js?v=2026-10-22j",
+        "./src/markdown.js?v=2026-10-22j",
+        "./src/ocr.js?v=2026-10-22j",
+        "./src/ai.js?v=2026-10-22j",
+        "./src/jobs.js?v=2026-10-22j",
+        "./src/ui.js?v=2026-10-22j",
+        "./src/main.js?v=2026-10-22j",
       ].forEach(function (src) {
         var script = document.createElement("script");
         script.src = src;

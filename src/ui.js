@@ -703,6 +703,12 @@ Active transport is the movement of substances against a concentration gradient,
       const needle = query.toLowerCase();
       if (kit.name.toLowerCase().includes(needle)) return true;
       if (kit.subject.toLowerCase().includes(needle)) return true;
+      // Also match card prompts/answers and quiz questions, so search finds the
+      // topic rather than only the kit that happens to hold it.
+      const cards = (kit.flashcards && kit.flashcards.items) || [];
+      if (cards.some((card) => `${card.front} ${card.back}`.toLowerCase().includes(needle))) return true;
+      const questions = (kit.quiz && kit.quiz.items) || [];
+      if (questions.some((item) => String(item.question || "").toLowerCase().includes(needle))) return true;
       return state.resources.some(
         (resource) =>
           resource.kitId === kit.id &&
@@ -723,6 +729,11 @@ Active transport is the movement of substances against a concentration gradient,
     );
     const attempts = state.kits.reduce(
       (total, kit) => total + (kit.quiz && kit.quiz.attempts ? kit.quiz.attempts.length : 0),
+      0,
+    );
+    const secondsStudied = state.kits.reduce(
+      (total, kit) =>
+        total + ((kit.quiz && kit.quiz.attempts) || []).reduce((sum, attempt) => sum + (attempt.secondsUsed || 0), 0),
       0,
     );
     const best = state.kits.reduce((top, kit) => {
@@ -765,6 +776,7 @@ Active transport is the movement of substances against a concentration gradient,
               <div class="stat"><span class="stat-value">${state.kits.length}</span><span class="stat-label">Study kits</span></div>
               <div class="stat"><span class="stat-value">${cardCount}</span><span class="stat-label">Flashcards</span></div>
               <div class="stat"><span class="stat-value">${attempts}</span><span class="stat-label">Quiz attempts</span></div>
+              <div class="stat"><span class="stat-value">${formatMinutes(secondsStudied)}</span><span class="stat-label">Time in quizzes</span></div>
               <div class="stat accent"><span class="stat-value">${attempts ? `${best}%` : "—"}</span><span class="stat-label">Best quiz score</span></div>
             </div>`
           : ""
@@ -904,6 +916,17 @@ Active transport is the movement of substances against a concentration gradient,
           )
           .join("")}
       </section>`;
+  }
+
+  /** "4m" / "1h 20m" / "—" for the dashboard stats. */
+  function formatMinutes(seconds) {
+    if (!seconds) return "—";
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 1) return "<1m";
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    return rest ? `${hours}h ${rest}m` : `${hours}h`;
   }
 
   /** Monday-based week with the days that already have activity on them. */
