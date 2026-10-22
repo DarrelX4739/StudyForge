@@ -1173,30 +1173,130 @@ Active transport is the movement of substances against a concentration gradient,
   }
 
   /** One-click way back into whatever was studied most recently. */
-  function renderContinueCard(state) {
-    if (!state.kits.length || query || filterClassId) return "";
+  /**
+   * "Up next" — one recommendation instead of a menu. The order is deliberate:
+   * an unfinished quiz first (it is already half done), then cards that are due,
+   * then a kit with an exam close, then the kit with the weakest last attempt,
+   * and finally whatever was touched most recently.
+   */
+  function nextStep(state) {
+    let draft = null;
+    try {
+      const raw = localStorage.getItem(QUIZ_DRAFT_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const kit = state.kits.find((entry) => entry.id === parsed.kitId);
+        if (kit) draft = { kit, data: parsed };
+      }
+    } catch (error) {
+      draft = null;
+    }
+    if (draft) {
+      const total = Array.isArray(draft.data.items) && draft.data.items.length ? draft.data.items.length : 0;
+      const marked = Object.keys(draft.data.results || {}).length;
+      return {
+        kit: draft.kit,
+        title: "Finish your quiz",
+        reason: `${marked} of ${total || "the"} questions marked — pick up where you stopped.`,
+        href: `#/kit/${draft.kit.id}/questions`,
+        cta: "Resume quiz",
+      };
+    }
+
+    const due = state.kits
+      .map((kit) => ({ kit, schedule: kit.flashcards ? store.deckSchedule(kit.id) : null }))
+      .filter((entry) => entry.schedule && entry.schedule.due > 0)
+      .sort((a, b) => b.schedule.due - a.schedule.due)[0];
+    if (due) {
+      return {
+        kit: due.kit,
+        title: `${due.schedule.due} card${due.schedule.due === 1 ? "" : "s"} due for review`,
+        reason: `Spaced review keeps ${due.kit.name} fresh — this is the smallest useful session right now.`,
+        href: `#/kit/${due.kit.id}/flashcards`,
+        cta: "Revise now",
+        action: "review-all-due",
+        id: due.kit.id,
+      };
+    }
+
+    const examSoon = state.kits
+      .map((kit) => ({ kit, when: examCountdown(kit) }))
+      .filter((entry) => entry.when && !entry.when.past && entry.when.days <= 21)
+      .sort((a, b) => a.when.days - b.when.days)[0];
+    if (examSoon) {
+      return {
+        kit: examSoon.kit,
+        title: examSoon.when.label,
+        reason: `${examSoon.kit.name} — a timed paper is the closest thing to the real thing.`,
+        href: `#/kit/${examSoon.kit.id}/exam`,
+        cta: examSoon.kit.exam ? "Sit a practice test" : "Build a practice test",
+      };
+    }
+
+    const weakest = state.kits
+      .map((kit) => {
+        const attempts = (kit.quiz && kit.quiz.attempts) || [];
+        return { kit, attempt: attempts[0] };
+      })
+      .filter((entry) => entry.attempt && entry.attempt.percent < 70)
+      .sort((a, b) => a.attempt.percent - b.attempt.percent)[0];
+    if (weakest) {
+      return {
+        kit: weakest.kit,
+        title: `Lift ${weakest.kit.name} from ${weakest.attempt.percent}%`,
+        reason: "Practise just the questions you missed — that is the fastest way up.",
+        href: `#/kit/${weakest.kit.id}/questions`,
+        cta: "Open quiz",
+      };
+    }
+
     const recent = [...state.kits].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0];
-    if (!recent) return "";
+    if (!recent) return null;
     const hasQuiz = Boolean(recent.quiz);
     const hasCards = Boolean(recent.flashcards);
     const hasGuide = store.resourcesInKit(recent.id).some((resource) => resource.document);
-    if (!hasQuiz && !hasCards && !hasGuide) return "";
+    if (!hasQuiz && !hasCards && !hasGuide) return null;
     const attempt = recent.quiz && recent.quiz.attempts && recent.quiz.attempts[0];
+    return {
+      kit: recent,
+      title: recent.name,
+      reason: `Updated ${relativeTime(recent.updatedAt)}${attempt ? ` · last quiz ${attempt.percent}%` : ""}${
+        recent.subject ? ` · ${recent.subject}` : ""
+      }`,
+      href: hasQuiz
+        ? `#/kit/${recent.id}/questions`
+        : hasCards
+          ? `#/kit/${recent.id}/flashcards`
+          : `#/kit/${recent.id}/documents`,
+      cta: hasQuiz ? "Open quiz" : hasCards ? "Open deck" : "Open guide",
+      quiet: true,
+    };
+  }
+
+  function renderContinueCard(state) {
+    if (!state.kits.length || query || filterClassId) return "";
+    const step = nextStep(state);
+    if (!step || !step.kit) return "";
+    const kit = step.kit;
+    const hasQuiz = Boolean(kit.quiz);
+    const hasCards = Boolean(kit.flashcards);
+    const hasGuide = store.resourcesInKit(kit.id).some((resource) => resource.document);
+    const primary =
+      step.action && step.id
+        ? `<button class="btn small primary" data-action="${step.action}" data-id="${esc(step.id)}">${esc(step.cta)}</button>`
+        : `<a class="btn small primary" href="${step.href}">${esc(step.cta)}</a>`;
     return `
-      <section class="continue-card">
+      <section class="continue-card ${step.quiet ? "quiet" : ""}">
         <div class="continue-main">
-          <span class="pill accent">Pick up where you left off</span>
-          <h3>${esc(recent.name)}</h3>
-          <p class="muted tiny">
-            Updated ${esc(relativeTime(recent.updatedAt))}${
-              attempt ? ` · last quiz ${attempt.percent}%` : ""
-            }${recent.subject ? ` · ${esc(recent.subject)}` : ""}
-          </p>
+          <span class="pill accent">${step.quiet ? "Pick up where you left off" : "Up next"}</span>
+          <h3>${esc(step.title)}</h3>
+          <p class="muted tiny">${esc(step.reason)}</p>
         </div>
         <div class="row tight">
-          ${hasGuide ? `<a class="btn small" href="#/kit/${esc(recent.id)}/documents">Study guide</a>` : ""}
-          ${hasCards ? `<a class="btn small" href="#/kit/${esc(recent.id)}/flashcards">Flashcards</a>` : ""}
-          ${hasQuiz ? `<a class="btn small primary" href="#/kit/${esc(recent.id)}/questions">Quiz</a>` : ""}
+          ${primary}
+          ${hasGuide ? `<a class="btn small ghost" href="#/kit/${esc(kit.id)}/documents">Study guide</a>` : ""}
+          ${hasCards && !step.quiet ? `<a class="btn small ghost" href="#/kit/${esc(kit.id)}/flashcards">Flashcards</a>` : ""}
+          ${hasQuiz && !step.quiet ? `<a class="btn small ghost" href="#/kit/${esc(kit.id)}/questions">Quiz</a>` : ""}
         </div>
       </section>`;
   }

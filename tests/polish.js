@@ -54,6 +54,16 @@ const modal = () => window.document.getElementById("modal-root");
     check(`route ${route} renders`, text.length > 40 && !/Something went wrong/i.test(text), `${text.length} chars`);
   }
 
+  // ---------- up next recommendation ----------
+  window.location.hash = "#/";
+  await wait(150);
+  const upNext = view().querySelector(".continue-card");
+  check("dashboard recommends a next step", Boolean(upNext), upNext ? upNext.textContent.replace(/\s+/g, " ").slice(0, 70) : "");
+  check(
+    "the recommendation is about due cards on a fresh kit",
+    Boolean(upNext && /Up next/.test(upNext.textContent) && /due for review/.test(upNext.textContent)),
+  );
+
   // ---------- unseen-only run (fresh deck) ----------
   window.location.hash = `#/kit/${kit.id}/flashcards`;
   await wait(150);
