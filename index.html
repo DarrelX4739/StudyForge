@@ -856,6 +856,15 @@
   .backup-nudge{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 12px}
   .backup-nudge .btn{margin-left:auto}
 
+  /* Exam question palette */
+  .exam-palette{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 14px}
+  .palette-dot{
+    width:28px;height:28px;border-radius:8px;border:1px solid var(--line);
+    background:var(--panel);color:var(--muted);font-size:.75rem;font-weight:600;cursor:pointer;
+  }
+  .palette-dot:hover{border-color:var(--accent);color:var(--text)}
+  .palette-dot.done{background:var(--accent);border-color:var(--accent);color:#fff}
+
   /* Deck tools tucked behind one disclosure */
   .deck-more{position:relative;display:inline-block}
   .deck-more > summary{
@@ -1219,7 +1228,6 @@
   supported by the current build; releases/v0.1.1-alpha.js executes init.js as a
   plain async function, where `export const` is a syntax error.
 -->
-<script src="https://chibbit-99.github.io/arch.js/releases/latest.js"></script>
 <script>
   // Fallback only for the case where ARCH.js itself never starts. Without it
   // the page would stay inert if the runtime CDN is blocked or the runtime
@@ -1233,14 +1241,14 @@
       done = true;
       console.warn("[StudyForge] " + reason + "; loading the project files directly.");
       [
-        "./src/store.js?v=2026-10-22l",
-        "./src/local.js?v=2026-10-22l",
-        "./src/markdown.js?v=2026-10-22l",
-        "./src/ocr.js?v=2026-10-22l",
-        "./src/ai.js?v=2026-10-22l",
-        "./src/jobs.js?v=2026-10-22l",
-        "./src/ui.js?v=2026-10-22l",
-        "./src/main.js?v=2026-10-22l",
+        "./src/store.js?v=2026-10-22m",
+        "./src/local.js?v=2026-10-22m",
+        "./src/markdown.js?v=2026-10-22m",
+        "./src/ocr.js?v=2026-10-22m",
+        "./src/ai.js?v=2026-10-22m",
+        "./src/jobs.js?v=2026-10-22m",
+        "./src/ui.js?v=2026-10-22m",
+        "./src/main.js?v=2026-10-22m",
       ].forEach(function (src) {
         var script = document.createElement("script");
         script.src = src;
@@ -1249,10 +1257,19 @@
       });
     }
 
+    // Load the runtime ourselves so a blocked CDN is noticed immediately
+    // instead of leaving a blank page behind a ten-second timer.
+    var runtime = document.createElement("script");
+    runtime.src = "https://chibbit-99.github.io/arch.js/releases/latest.js";
+    runtime.onerror = function () {
+      loadDirectly("ARCH.js could not be reached");
+    };
+    document.head.appendChild(runtime);
+
     setTimeout(function () {
       if (window.__studyForgeBooted) return;
       if (typeof globalThis.importPackage !== "function") loadDirectly("ARCH.js did not load");
-    }, 10000);
+    }, 4000);
 
     setTimeout(function () {
       loadDirectly("ARCH.js did not finish starting");

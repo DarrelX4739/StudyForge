@@ -2324,6 +2324,15 @@ Active transport is the movement of substances against a concentration gradient,
           <span class="muted tiny" id="exam-answered">${answered}/${exam.items.length} answered</span>
           <button class="btn small primary" data-action="submit-exam">Submit exam</button>
         </div>
+        <div class="exam-palette" role="group" aria-label="Jump to a question">
+          ${exam.items
+            .map(
+              (_, index) =>
+                `<button class="palette-dot ${answers[index] !== undefined ? "done" : ""}" data-action="exam-jump" data-q="${index}"
+                  aria-label="Question ${index + 1}${answers[index] !== undefined ? " (answered)" : ""}">${index + 1}</button>`,
+            )
+            .join("")}
+        </div>
         <ol class="quiz exam-questions">
           ${exam.items
             .map(
@@ -4677,6 +4686,13 @@ Active transport is the movement of substances against a concentration gradient,
             startExam(kit);
           },
         });
+        break;
+      }
+      case "exam-jump": {
+        const index = Number(actionEl.dataset.q);
+        const items = els.view.querySelectorAll(".exam-questions .q");
+        const target = items[index];
+        if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
         break;
       }
       case "exam-answer": {

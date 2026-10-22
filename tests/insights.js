@@ -197,6 +197,7 @@ async function playQuiz({ pick = 0 } = {}) {
     opt.click();
     await wait(150);
     check("exam answer stored as a draft", Boolean(window.localStorage.getItem("studyforge.exam.v1")));
+    check("exam palette marks answered questions", view().querySelectorAll(".palette-dot.done").length >= 1);
     window.location.hash = "#/";
     await wait(150);
     window.location.hash = `#/kit/${kit.id}/exam`;
