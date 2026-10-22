@@ -195,6 +195,17 @@
     return score;
   }
 
+  /** True when a sentence fragment opens with a participle ("split, releasing…"). */
+  const PASSIVE_OPEN = /^(?:[a-z]{3,}ed|split|made|used|found|built|given|taken|known|shown|written|held|kept|left|set|cut|put|read|sent|spent|brought|caught|taught|thought|understood|drawn|grown|broken|chosen|driven|eaten|fallen|forgotten|hidden|ridden|risen|seen|spoken|stolen|struck|sworn|torn|worn|based|named|called)\b/i;
+  const looksPassive = (text) => PASSIVE_OPEN.test(String(text || "").trim());
+
+  // A term that ends in one of these is describing a process, not naming a thing.
+  const GENERIC_HEADS = new Set(
+    "activity process factor factors reaction reactions rate level amount type form part system change result effect example case thing way idea value role step stage".split(
+      " ",
+    ),
+  );
+
   function extractDefinitions(text) {
     const clean = plainText(text);
     const found = [];
@@ -203,15 +214,24 @@
 
     const push = (term, definition) => {
       const cleanTermValue = cleanTerm(term);
-      const body = tidy(definition).replace(/^[-–—:]\s*/, "");
+      let body = tidy(definition).replace(/^[-–—:]\s*/, "");
+      // Keep a definition to the sentence(s) that actually define it.
+      if (body.length > 240) {
+        const parts = body.split(/(?<=[.!?])\s+/);
+        body = parts.slice(0, 2).join(" ");
+        if (body.length > 320) body = parts[0];
+      }
       if (!cleanTermValue || body.length < 25) return;
       if (REJECT_TERM.test(cleanTermValue)) return;
       if (/[.!?]/.test(cleanTermValue)) return;
       if (definitionScore(cleanTermValue, body) < 0) return;
       // "Carbon dioxide and water" is a list, not a term.
       if (/\band\b/i.test(cleanTermValue)) return;
-      // A definition that opens with a participle ("affected by…") reads badly.
-      if (/^(affected|produced|used|found|caused|measured|released|absorbed|made|taken|needed|required)\b/i.test(body)) return;
+      // "Enzyme activity" describes a process, it does not name a thing.
+      if (GENERIC_HEADS.has(cleanTermValue.toLowerCase().split(/\s+/).pop())) return;
+      // A definition that opens with a participle ("affected by…", "split,
+      // releasing…") is a passive sentence, not a meaning.
+      if (looksPassive(body)) return;
       const key = cleanTermValue.toLowerCase();
       if (seen.has(key)) return;
       // Keep the shortest form of a term: "enzymes" beats "enzyme activity".
@@ -430,7 +450,17 @@
         // Recover the original casing from the sentence.
         const stem = candidates[0].word;
         const match = sentence.match(new RegExp(`\\b${stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[a-z]*\\b`, "i"));
-        if (match) addItem(sentence, match[0]);
+        if (!match) continue;
+        // "carbon dioxide" reads better than a bare "carbon".
+        const rest = sentence.slice(match.index + match[0].length);
+        const next = rest.match(/^\s+([a-z]{3,})\b/);
+        let phrase = match[0];
+        if (next) {
+          const bigram = `${match[0]} ${next[1]}`.toLowerCase();
+          const occurrences = (plainText(text).toLowerCase().match(new RegExp(`\\b${bigram}\\b`, "g")) || []).length;
+          if (occurrences >= 2) phrase = `${match[0]} ${next[1]}`;
+        }
+        addItem(sentence, phrase);
         if (items.length >= limit) break;
       }
     }
@@ -441,6 +471,23 @@
   /* ------------------------------------------------------------------ *
    * Flashcards
    * ------------------------------------------------------------------ */
+
+  /** Reject adjectives, adverbs and verb forms when a card front will be a bare word. */
+  const WEAK_WORDS = new Set(
+    ("green blue red high low large small special different same important main " +
+      "certain various several many much more most less least first second third next last " +
+      "new old good bad better best worse worst possible likely able available " +
+      "however therefore because although while since during after before between " +
+      "independent dependent directly slowly quickly sharply strongly").split(" "),
+  );
+
+  function isNounLike(word) {
+    const value = String(word || "").toLowerCase().trim();
+    if (value.length < 4) return false;
+    if (WEAK_WORDS.has(value)) return false;
+    if (/(?:ing|ly|ed)$/.test(value)) return false;
+    return !STOPWORDS.has(value);
+  }
 
   function buildFlashcards({ text = "", count = 20, style = "vocab", seed = 0 } = {}) {
     if (!hasUsableText(text)) {
@@ -483,13 +530,12 @@
       }
       for (const item of cloze) {
         if (cards.length >= total) break;
-        // Only when the answer reads as a real term (a proper noun in the source);
-        // "energy" or "water" makes a confusing card front.
-        const front = String(item.answer);
-        const looksLikeTerm =
-          front.includes(" ") || new RegExp(`\\b${escapeRegExp(front.slice(0, 1).toUpperCase() + front.slice(1))}\\b`).test(item.sentence);
-        if (!looksLikeTerm) continue;
-        add(front, item.sentence);
+        const answer = String(item.answer);
+        // A single lowercase word only makes a good card when it reads as a
+        // thing ("thylakoid"), not a quality ("green") or an action.
+        const single = !answer.includes(" ");
+        if (single && !isNounLike(answer)) continue;
+        add(single ? answer.slice(0, 1).toUpperCase() + answer.slice(1) : answer, item.sentence);
       }
     }
 
@@ -499,7 +545,7 @@
       const match = sentence.match(/^([A-Z][\w'’\- ]{2,40}?)\s+(?:is|are|was|were|means)\s+(.{15,})$/);
       if (!match) continue;
       if (/\band\b/i.test(match[1])) continue;
-      if (/^(affected|produced|used|found|caused|measured|released|absorbed|made|taken|needed|required)\b/i.test(match[2])) continue;
+      if (looksPassive(match[2])) continue;
       add(match[1], match[2]);
     }
 

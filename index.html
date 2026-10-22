@@ -882,6 +882,15 @@
     border-color:color-mix(in srgb,var(--accent) 35%,transparent);
   }
 
+  /* End-of-deck summary */
+  .deck-summary{text-align:center;max-width:560px;margin:0 auto;padding:8px 0 4px}
+  .deck-summary h3{margin:2px 0 14px}
+  .summary-figures{display:flex;justify-content:center;gap:28px;margin:0 0 12px}
+  .summary-figures > div{display:flex;flex-direction:column;gap:2px}
+  .summary-figure{font-size:1.5rem;font-weight:700}
+  .summary-bar{height:6px;border-radius:999px;background:var(--panel-3);overflow:hidden;margin:0 0 12px}
+  .summary-bar > span{display:block;height:100%;background:var(--good);border-radius:999px}
+
   /* Typed-recall mode */
   .fc-typing{display:flex;flex-direction:column;gap:10px;align-items:center;text-align:center;max-width:520px;margin:0 auto}
   .fc-typing .fc-text{font-size:1.35rem;font-weight:600;line-height:1.35;margin:2px 0 6px}
@@ -1289,14 +1298,14 @@
       done = true;
       console.warn("[StudyForge] " + reason + "; loading the project files directly.");
       [
-        "./src/store.js?v=2026-10-22p",
-        "./src/local.js?v=2026-10-22p",
-        "./src/markdown.js?v=2026-10-22p",
-        "./src/ocr.js?v=2026-10-22p",
-        "./src/ai.js?v=2026-10-22p",
-        "./src/jobs.js?v=2026-10-22p",
-        "./src/ui.js?v=2026-10-22p",
-        "./src/main.js?v=2026-10-22p",
+        "./src/store.js?v=2026-10-22r",
+        "./src/local.js?v=2026-10-22r",
+        "./src/markdown.js?v=2026-10-22r",
+        "./src/ocr.js?v=2026-10-22r",
+        "./src/ai.js?v=2026-10-22r",
+        "./src/jobs.js?v=2026-10-22r",
+        "./src/ui.js?v=2026-10-22r",
+        "./src/main.js?v=2026-10-22r",
       ].forEach(function (src) {
         var script = document.createElement("script");
         script.src = src;

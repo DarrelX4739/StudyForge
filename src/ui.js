@@ -88,6 +88,7 @@
     typing: false,
     typed: "",
     typedVerdict: null,
+    finished: false,
     lastScheduled: null,
   };
   // Which classes / kits are open in the sidebar tree.
@@ -211,6 +212,7 @@
       typing: false,
       typed: "",
       typedVerdict: null,
+      finished: false,
       lastScheduled: null,
     };
   }
@@ -1727,7 +1729,7 @@ Active transport is the movement of substances against a concentration gradient,
           </p>
           <div class="quiz-facts">
             <span class="pill">${plural(choiceCount, "multiple choice question")}</span>
-            ${shortCount ? `<span class="pill">${plural(shortCount, "short answer")} · AI marked</span>` : ""}
+            ${shortCount ? `<span class="pill">${plural(shortCount, "short answer")} · marked ${aiMarkLabel()}</span>` : ""}
             ${attempts.length ? `<span class="pill accent">Best ${best}%</span>` : `<span class="pill">No attempts yet</span>`}
           </div>
         </div>
@@ -1752,6 +1754,11 @@ Active transport is the movement of substances against a concentration gradient,
           <button class="btn small ghost" data-action="discard-draft">Discard</button>
         </div>
       </div>`;
+  }
+
+  /** Where short answers get marked — the wording should match the engine. */
+  function aiMarkLabel() {
+    return StudyForge.ai.isAiEnabled() ? "by AI" : "on this device";
   }
 
   /** The questions in play: a full set, or the missed-only retry subset. */
@@ -1916,7 +1923,7 @@ Active transport is the movement of substances against a concentration gradient,
           <p class="muted small">
             ${attempt.correct} of ${attempt.total} correct${
               attempt.secondsUsed ? ` · ${formatClock(attempt.secondsUsed)}` : ""
-            }${shortCount ? ` · ${plural(shortCount, "AI-marked short answer")}` : ""}
+            }${shortCount ? ` · ${plural(shortCount, "short answer")} marked ${aiMarkLabel()}` : ""}
           </p>
           ${(() => {
             const attempts = (quiz.attempts || []).filter((entry) => entry.id !== attempt.id);
@@ -2207,6 +2214,8 @@ Active transport is the movement of substances against a concentration gradient,
     const againCount = progress.again;
     const percent = Math.round((position / order.length) * 100);
 
+    if (flashState.finished) return renderDeckSummary(kit, progress);
+
     return `
       <div class="deck">
         <div class="deck-bar">
@@ -2321,6 +2330,36 @@ Active transport is the movement of substances against a concentration gradient,
           </details>
         </div>
         ${flashState.showList ? renderDeckList(items) : ""}
+      </div>`;
+  }
+
+  /** The end of a deck: what was learned, and where to go next. */
+  function renderDeckSummary(kit, progress) {
+    const schedule = store.deckSchedule(kit.id);
+    const total = kit.flashcards.items.length;
+    const known = progress.known;
+    const again = progress.again;
+    const percent = total ? Math.round((known / total) * 100) : 0;
+    return `
+      <div class="deck-summary">
+        <p class="eyebrow">Deck finished</p>
+        <h3>${percent >= 80 ? "Strong run." : percent >= 50 ? "Good progress." : "Keep going — this is normal."}</h3>
+        <div class="summary-figures">
+          <div><span class="summary-figure">${known}</span><span class="muted tiny">known</span></div>
+          <div><span class="summary-figure">${again}</span><span class="muted tiny">still learning</span></div>
+          <div><span class="summary-figure">${schedule.due}</span><span class="muted tiny">due now</span></div>
+        </div>
+        <div class="summary-bar"><span style="width:${percent}%"></span></div>
+        <p class="muted small">${
+          schedule.nextDueAt
+            ? `The next card comes back ${esc(dueLabel(schedule.nextDueAt))}.`
+            : "Everything is scheduled for later."
+        }</p>
+        <div class="row center tight">
+          ${again ? `<button class="btn primary small" data-action="review-again">Review ${again} still learning</button>` : ""}
+          <button class="btn small" data-action="restart-cards">Go through again</button>
+          <a class="btn small ghost" href="#/kit/${esc(kit.id)}/questions">Take the quiz</a>
+        </div>
       </div>`;
   }
 
@@ -3598,6 +3637,7 @@ Active transport is the movement of substances against a concentration gradient,
     flashState.flipped = false;
     flashState.typed = "";
     flashState.typedVerdict = null;
+    flashState.finished = false;
     render();
   }
 
@@ -3627,8 +3667,8 @@ Active transport is the movement of substances against a concentration gradient,
       render();
     } else {
       flashState.flipped = false;
+      flashState.finished = true;
       render();
-      toast("Last card in the deck.", "info");
     }
   }
 
@@ -3643,6 +3683,9 @@ Active transport is the movement of substances against a concentration gradient,
     flashState.order = order;
     flashState.index = 0;
     flashState.flipped = false;
+    flashState.finished = false;
+    flashState.typed = "";
+    flashState.typedVerdict = null;
     flashState.shuffled = true;
     flashState.reviewMode = false;
     flashState.dueOnly = false;
@@ -4820,6 +4863,9 @@ Active transport is the movement of substances against a concentration gradient,
         flashState.reviewMode = true;
         flashState.index = 0;
         flashState.flipped = false;
+        flashState.finished = false;
+        flashState.typed = "";
+        flashState.typedVerdict = null;
         flashState.showList = false;
         render();
         toast("Reviewing the cards you are still learning.");
@@ -4827,6 +4873,7 @@ Active transport is the movement of substances against a concentration gradient,
       }
       case "toggle-typing": {
         flashState.typing = !flashState.typing;
+        flashState.finished = false;
         flashState.typed = "";
         flashState.typedVerdict = null;
         flashState.flipped = false;

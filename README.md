@@ -225,6 +225,8 @@ merged, de-duplicated by prompt and interleaved so the deck is not grouped by re
 
 - Each card is one fact: a **front** you are cued with and a **back** you try to recall.
 - Choose 10, 20, 30 or 40 cards.
+- **Deck summary** when you reach the end: what you know, what is still slipping, and one tap back
+  into the cards you missed.
 - **Type answers** mode: recall the answer from memory, type it and let StudyForge check the wording
   loosely, then rate yourself.
 - **Print deck** produces a clean two-column sheet of every prompt and answer for offline revision.
@@ -430,9 +432,10 @@ npm test
 | `polish` | Every route, answer locking, attempt persistence and review, card scheduling, streaks, shortcuts, quiz resume, printing, paste-cards, undo. |
 | `settings` | Provider switching, per-provider keys, search, theme, sidebar. |
 | `ui-provider` | Provider picker, stubbed Gemini/OpenRouter/custom requests, sample kit, missed-question retry, review mode. |
+| `local-engine` | The on-device generator on its own (plain node): guide sections, card quality, four-option questions, seeds and refusals. |
 | `insights` | Progress analytics across attempts, trouble spots, per-question pace, hardest cards, card editing, the review schedule and exam resume. |
 
-All six suites pass — 208 checks, zero console errors.
+All seven suites pass — 215 checks, zero console errors.
 
 ## Limitations
 

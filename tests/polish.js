@@ -301,6 +301,25 @@ const modal = () => window.document.getElementById("modal-root");
   const ratedAfter = Object.keys(store.getKit(kit.id).flashcards.ratings || {}).length;
   check("K rates the current card", ratedAfter >= ratedBefore, `${ratedBefore} -> ${ratedAfter}`);
 
+  // ---------- end of deck ----------
+  window.location.hash = `#/kit/${kit.id}/flashcards`;
+  await wait(160);
+  for (let i = 0; i < 40; i += 1) {
+    const known = view().querySelector('[data-action="card-known"]');
+    if (!known) break;
+    if (view().querySelector(".deck-summary")) break;
+    known.click();
+    await wait(90);
+    if (view().querySelector(".deck-summary")) break;
+  }
+  check("finishing a deck shows a summary", Boolean(view().querySelector(".deck-summary")));
+  if (view().querySelector(".deck-summary")) {
+    check("summary counts known cards", /known/.test(view().querySelector(".deck-summary").textContent));
+    view().querySelector('[data-action="restart-cards"]').click();
+    await wait(150);
+    check("restart leaves the summary", !view().querySelector(".deck-summary"));
+  }
+
   // ---------- typed recall ----------
   window.location.hash = `#/kit/${kit.id}/flashcards`;
   await wait(160);
