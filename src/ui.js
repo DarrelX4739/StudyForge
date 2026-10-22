@@ -41,6 +41,9 @@
 
   // Set when the dashboard asks to jump into a due-card review.
   let pendingDueReview = null;
+  // Match game: pair up terms and definitions. Idle unless started from a deck.
+  let matchState = { kitId: null, active: false, tiles: [], picked: [], matched: [], wrong: 0, startedAt: 0, finished: false };
+  let matchTick = null;
 
   // Read-aloud state for the study guide (uses the browser's own voices).
   let speechState = { speaking: false, resourceId: null };
@@ -446,6 +449,7 @@
     if (document.body.classList.contains("doc-focus") && !(route.name === "kit" && route.tab === "documents")) {
       document.body.classList.remove("doc-focus");
     }
+    if (!(route.name === "kit" && route.tab === "flashcards")) stopMatchClock();
     const snapshot = captureDrafts();
     els.view.innerHTML = "";
 
@@ -2367,6 +2371,7 @@ Active transport is the movement of substances against a concentration gradient,
     const percent = Math.round((position / order.length) * 100);
 
     if (flashState.finished) return renderDeckSummary(kit, progress);
+    if (matchState.active && matchState.kitId === kit.id) return renderMatch(kit);
 
     return `
       <div class="deck">
@@ -2467,6 +2472,11 @@ Active transport is the movement of substances against a concentration gradient,
           <button class="btn small ghost" data-action="toggle-typing">${
             flashState.typing ? "Flip mode" : "Type answers"
           }</button>
+          ${
+            items.length >= 3
+              ? `<button class="btn small ghost" data-action="start-match">Match game</button>`
+              : ""
+          }
           <button class="btn small ghost" data-action="shuffle-cards">Shuffle</button>
           <button class="btn small ghost" data-action="deck-list">${
             flashState.showList ? "Back to card" : "Browse all"
@@ -2516,6 +2526,138 @@ Active transport is the movement of substances against a concentration gradient,
           ${again ? `<button class="btn primary small" data-action="review-again">Review ${again} still learning</button>` : ""}
           <button class="btn small" data-action="restart-cards">Go through again</button>
           <a class="btn small ghost" href="#/kit/${esc(kit.id)}/questions">Take the quiz</a>
+        </div>
+      </div>`;
+  }
+
+  /* --------------------------- match game --------------------------- */
+
+  const MATCH_PAIRS = 6;
+
+  function stopMatchClock() {
+    if (matchTick) clearInterval(matchTick);
+    matchTick = null;
+  }
+
+  /** Six terms and six definitions, shuffled into one board. */
+  function startMatch(kit) {
+    if (!kit || !kit.flashcards) return;
+    const items = kit.flashcards.items.slice(0, MATCH_PAIRS);
+    if (items.length < 3) {
+      toast("Add a few more cards before playing match.", "error");
+      return;
+    }
+    const tiles = [];
+    items.forEach((card, index) => {
+      tiles.push({ pair: index, kind: "term", text: card.front });
+      tiles.push({ pair: index, kind: "answer", text: card.back });
+    });
+    for (let i = tiles.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [tiles[i], tiles[j]] = [tiles[j], tiles[i]];
+    }
+    matchState = {
+      kitId: kit.id,
+      active: true,
+      tiles,
+      picked: [],
+      matched: [],
+      wrong: 0,
+      startedAt: Date.now(),
+      finished: false,
+    };
+    stopMatchClock();
+    matchTick = setInterval(() => {
+      const clock = document.getElementById("match-clock");
+      if (!clock || !matchState.active || matchState.finished) return;
+      clock.textContent = formatClock((Date.now() - matchState.startedAt) / 1000);
+    }, 500);
+    flashState.showList = false;
+    // Coming back from the game should land on a card, not the end summary.
+    flashState.finished = false;
+    render();
+  }
+
+  function pickMatchTile(index) {
+    if (matchState.finished || matchState.picked.includes(index) || matchState.matched.includes(index)) return;
+    matchState.picked.push(index);
+    if (matchState.picked.length < 2) {
+      render();
+      return;
+    }
+    const [first, second] = matchState.picked;
+    const a = matchState.tiles[first];
+    const b = matchState.tiles[second];
+    if (a && b && a.pair === b.pair) {
+      matchState.matched.push(first, second);
+      matchState.picked = [];
+      const total = matchState.tiles.length;
+      if (matchState.matched.length >= total) {
+        matchState.finished = true;
+        stopMatchClock();
+        store.recordActivity("cards", 1);
+      }
+      render();
+      return;
+    }
+    matchState.wrong += 1;
+    matchState.picked = [];
+    // Flash the two wrong tiles, then settle back.
+    render();
+    const board = els.view.querySelector(".match-board");
+    if (board) {
+      [first, second].forEach((tile) => {
+        const node = board.querySelector(`[data-tile="${tile}"]`);
+        if (node) node.classList.add("miss");
+      });
+    }
+    setTimeout(() => {
+      const current = els.view.querySelector(".match-board");
+      if (current) current.querySelectorAll(".miss").forEach((node) => node.classList.remove("miss"));
+    }, 380);
+  }
+
+  function renderMatch(kit) {
+    const tiles = matchState.tiles;
+    const matched = new Set(matchState.matched);
+    const pairs = tiles.length / 2;
+    const seconds = Math.max(0, Math.round((Date.now() - matchState.startedAt) / 1000));
+    if (matchState.finished) {
+      const accuracy = Math.max(0, Math.round((pairs / Math.max(1, pairs + matchState.wrong)) * 100));
+      return `
+        <div class="match-wrap">
+          <div class="match-result">
+            <p class="eyebrow">Board cleared</p>
+            <h3>${formatClock(seconds)} · ${pairs} pairs</h3>
+            <p class="muted small">${matchState.wrong ? `${plural(matchState.wrong, "wrong pick")}.` : "No wrong picks at all."}
+              ${accuracy}% of your picks were right.</p>
+            <div class="row center tight">
+              <button class="btn primary small" data-action="start-match">Play again</button>
+              <button class="btn small" data-action="stop-match">Back to cards</button>
+            </div>
+          </div>
+        </div>`;
+    }
+    return `
+      <div class="match-wrap">
+        <div class="match-bar">
+          <span class="muted tiny">Tap a term and its meaning</span>
+          <span class="match-progress">${matched.size / 2}/${pairs} pairs</span>
+          <span class="muted tiny" id="match-clock">${formatClock(seconds)}</span>
+          <button class="btn small ghost" data-action="stop-match">Back to cards</button>
+        </div>
+        <div class="match-board">
+          ${tiles
+            .map((tile, index) => {
+              const done = matched.has(index);
+              const picked = matchState.picked.includes(index);
+              return `<button class="match-tile ${tile.kind} ${done ? "done" : ""} ${picked ? "picked" : ""}"
+                data-action="match-tile" data-tile="${index}" ${done ? "disabled" : ""}>
+                <span class="match-kind">${tile.kind === "term" ? "Term" : "Meaning"}</span>
+                <span class="match-text">${esc(tile.text)}</span>
+              </button>`;
+            })
+            .join("")}
         </div>
       </div>`;
   }
@@ -5084,6 +5226,22 @@ Active transport is the movement of substances against a concentration gradient,
         render();
         const next = els.view.querySelector("[data-card-typed]");
         if (next) next.focus();
+        break;
+      }
+      case "start-match": {
+        const kit = store.getKit(route.id);
+        if (kit) startMatch(kit);
+        break;
+      }
+      case "stop-match": {
+        stopMatchClock();
+        matchState = { kitId: null, active: false, tiles: [], picked: [], matched: [], wrong: 0, startedAt: 0, finished: false };
+        render();
+        break;
+      }
+      case "match-tile": {
+        const index = Number(actionEl.dataset.tile);
+        if (Number.isInteger(index)) pickMatchTile(index);
         break;
       }
       case "shuffle-cards":

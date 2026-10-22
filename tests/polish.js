@@ -407,6 +407,47 @@ const modal = () => window.document.getElementById("modal-root");
     check("CSV quotes every field", rows[1].startsWith('"') && rows[1].includes('","'));
   }
 
+  // ---------- match game ----------
+  window.location.hash = `#/kit/${kit.id}/flashcards`;
+  await wait(160);
+  const matchBtn = view().querySelector('[data-action="start-match"]');
+  check("deck offers a match game", Boolean(matchBtn));
+  if (matchBtn) {
+    matchBtn.click();
+    await wait(200);
+    const tiles = [...view().querySelectorAll('[data-action="match-tile"]')];
+    check("match board has twelve tiles", tiles.length === 12, `${tiles.length} tiles`);
+    // Pair them up using the rendered labels against the deck. The board is
+    // re-rendered after each match, so re-query the tiles every time.
+    const cards = store.getKit(kit.id).flashcards.items;
+    const findTile = (text) =>
+      [...view().querySelectorAll('[data-action="match-tile"]')].find(
+        (tile) => !tile.disabled && tile.querySelector(".match-text").textContent === text,
+      );
+    let pairsMade = 0;
+    for (const card of cards.slice(0, 6)) {
+      const term = findTile(card.front);
+      const answer = findTile(card.back);
+      if (!term || !answer) continue;
+      term.click();
+      await wait(70);
+      findTile(card.back)?.click();
+      await wait(110);
+      pairsMade += 1;
+    }
+    check("matching pairs clears tiles", pairsMade > 0, `${pairsMade} pairs`);
+    const result = view().querySelector(".match-result");
+    check("clearing the board shows a result", Boolean(result), result ? result.textContent.replace(/\s+/g, " ").slice(0, 50) : "");
+    if (result) {
+      view().querySelector('[data-action="stop-match"]').click();
+      await wait(150);
+      check(
+        "leaving the game returns to the deck",
+        Boolean(view().querySelector(".flashcard, .fc-typing, .deck-summary")),
+      );
+    }
+  }
+
   // ---------- printable sheets ----------
   window.location.hash = `#/kit/${kit.id}/flashcards`;
   await wait(150);
