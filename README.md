@@ -432,10 +432,11 @@ npm test
 | `polish` | Every route, answer locking, attempt persistence and review, card scheduling, streaks, shortcuts, quiz resume, printing, paste-cards, undo. |
 | `settings` | Provider switching, per-provider keys, search, theme, sidebar. |
 | `ui-provider` | Provider picker, stubbed Gemini/OpenRouter/custom requests, sample kit, missed-question retry, review mode. |
+| `resume` | 15 — boots the app twice with the same storage to prove an unfinished quiz and exam really resume after a reload. |
 | `local-engine` | The on-device generator on its own (plain node): guide sections, card quality, four-option questions, seeds and refusals. |
 | `insights` | Progress analytics across attempts, trouble spots, per-question pace, hardest cards, card editing, the review schedule and exam resume. |
 
-All seven suites pass — 240 checks, zero console errors.
+All eight suites pass — 255 checks, zero console errors.
 
 ## Limitations
 
