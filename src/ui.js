@@ -935,6 +935,7 @@ Active transport is the movement of substances against a concentration gradient,
           <h1>${esc(kit.name)}</h1>
         </div>
         <div class="row tight">
+          <button class="btn primary" data-action="study-now" data-id="${esc(kit.id)}">Study now</button>
           <button class="btn" data-action="edit-kit" data-id="${esc(kit.id)}">Edit details</button>
           <button class="btn" data-action="delete-kit" data-id="${esc(kit.id)}">Delete kit</button>
         </div>
@@ -3566,6 +3567,23 @@ Active transport is the movement of substances against a concentration gradient,
             toast("Card progress reset.", "success");
           },
         });
+        break;
+      }
+      case "study-now": {
+        const kit = id ? store.getKit(id) : null;
+        if (!kit) break;
+        const due = kit.flashcards ? dueAcrossKits({ kits: [kit] }) : { total: 0 };
+        if (due.total) {
+          pendingDueReview = kit.id;
+          window.location.hash = `#/kit/${kit.id}/flashcards`;
+          break;
+        }
+        if (kit.quiz) {
+          window.location.hash = `#/kit/${kit.id}/questions`;
+          break;
+        }
+        window.location.hash = `#/kit/${kit.id}`;
+        toast("Add a resource first — then everything else follows.", "info");
         break;
       }
       case "review-all-due": {

@@ -69,6 +69,7 @@ A modern, responsive layout with a grouped sidebar:
   driven by real actions (guides generated, cards rated, quizzes finished).
 - **Continue card** jumps straight back into the kit you last worked on.
 - **Cards due** panel totals every card waiting for review and starts a due-only session in one click.
+- **Study now** on any kit does the right next thing: due cards if any are waiting, otherwise the quiz.
 
 - **Sidebar** — *Overview* (Dashboard) and an expandable **Classes** tree: click a class to open its
   study kits, click a kit to open its four study modes — **Study guide**, **Flashcards**, **Quiz** and
