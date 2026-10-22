@@ -68,6 +68,7 @@ A modern, responsive layout with a grouped sidebar:
 - **Streak strip** on the dashboard shows consecutive study days and a 14-day activity heat strip,
   driven by real actions (guides generated, cards rated, quizzes finished).
 - **Continue card** jumps straight back into the kit you last worked on.
+- **Cards due** panel totals every card waiting for review and starts a due-only session in one click.
 
 - **Sidebar** — *Overview* (Dashboard) and an expandable **Classes** tree: click a class to open its
   study kits, click a kit to open its four study modes — **Study guide**, **Flashcards**, **Quiz** and
@@ -141,7 +142,8 @@ sections, each of which becomes part of one complete Markdown study document.
 
 - Rendered as Markdown, or edited in place (manual corrections are saved).
 - Table of contents generated from the headings, with jump links.
-- Copy, download as `.md`, or **Print** (prints the guide alone, not the app chrome).
+- Copy, download as `.md`, **Print** (prints the guide alone, not the app chrome), or **Listen** —
+  the browser reads the guide aloud, offline, with no key.
 - The document is saved to `localStorage`; **the uploaded file and its raw extracted text are not**.
 
 ### Quiz (per study kit)

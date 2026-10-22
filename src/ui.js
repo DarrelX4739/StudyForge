@@ -42,6 +42,9 @@
   // Set when the dashboard asks to jump into a due-card review.
   let pendingDueReview = null;
 
+  // Read-aloud state for the study guide (uses the browser's own voices).
+  let speechState = { speaking: false, resourceId: null };
+
   // Quiz run. One question at a time: the answer is locked and marked the
   // moment "Next" is pressed, and everything is saved when the quiz is
   // submitted at the end.
@@ -1006,6 +1009,9 @@ Active transport is the movement of substances against a concentration gradient,
             <h2>${esc(selected.name)}</h2>
             <div class="row tight">
               <a class="btn small" href="#/resource/${esc(selected.id)}">Open resource</a>
+              <button class="btn small" data-action="listen-doc" data-id="${esc(selected.id)}">${
+                speechState.speaking && speechState.resourceId === selected.id ? "Stop reading" : "Listen"
+              }</button>
               <button class="btn small" data-action="print-doc" data-id="${esc(selected.id)}">Print</button>
               <button class="btn small" data-action="copy-doc" data-id="${esc(selected.id)}">Copy</button>
               <button class="btn small" data-action="download-doc" data-id="${esc(selected.id)}">Download .md</button>
@@ -1635,6 +1641,40 @@ Active transport is the movement of substances against a concentration gradient,
           The clock keeps running if you leave this tab, and the exam submits itself when time is up.
           Only multiple-choice questions are used so the paper can be marked automatically.
         </div>
+      </section>
+      ${renderExamAttempts(kit)}`;
+  }
+
+  /** Saved exam sittings, each of which can be reviewed question by question. */
+  function renderExamAttempts(kit) {
+    const attempts = (kit.exam && kit.exam.attempts) || [];
+    if (!attempts.length) return "";
+    return `
+      <section class="panel attempts-panel">
+        <div class="panel-head">
+          <div>
+            <h2>Past exam sittings</h2>
+            <p class="muted tiny">Every submitted practice test is kept here.</p>
+          </div>
+        </div>
+        <ol class="attempt-list">
+          ${attempts
+            .map(
+              (attempt) => `
+                <li class="attempt-row">
+                  <span class="attempt-score ${attempt.percent >= 70 ? "good" : attempt.percent >= 50 ? "mid" : "low"}">${attempt.percent}%</span>
+                  <span class="attempt-main">
+                    <strong>${attempt.correct}/${attempt.total} correct</strong>
+                    <span class="muted tiny">${esc(new Date(attempt.takenAt).toLocaleString())}${
+                      attempt.secondsUsed ? ` · ${formatClock(attempt.secondsUsed)}` : ""
+                    }</span>
+                  </span>
+                  <span class="attempt-bar"><span style="width:${attempt.percent}%"></span></span>
+                  <button class="btn ghost small" data-action="review-exam-attempt" data-id="${esc(attempt.id)}">Review</button>
+                </li>`,
+            )
+            .join("")}
+        </ol>
       </section>`;
   }
 
@@ -1697,6 +1737,7 @@ Active transport is the movement of substances against a concentration gradient,
             <p class="muted tiny">${result.timedOut ? "Time ran out — the paper was submitted automatically." : "Submitted."}</p>
           </div>
           <div class="row tight">
+            <button class="btn small" data-action="exam-overview">Past sittings</button>
             <button class="btn small" data-action="retake-exam">Retake</button>
             <button class="btn small" data-action="make-exam" data-id="${esc(kit.id)}">New exam</button>
           </div>
@@ -2205,6 +2246,65 @@ Active transport is the movement of substances against a concentration gradient,
   }
 
   /** Read back a saved attempt: your answer next to the model answer. */
+  /* --------------------------- read aloud --------------------------- */
+
+  /**
+   * Read the study guide with the browser's built-in speech synthesis. Works
+   * offline, needs no key, and reads in sentence-sized chunks so stopping is
+   * immediate.
+   */
+  function startSpeech(resource) {
+    if (!("speechSynthesis" in window) || typeof window.SpeechSynthesisUtterance !== "function") {
+      toast("This browser cannot read text aloud.", "error");
+      return;
+    }
+    stopSpeech();
+    const chunks = String(resource.document || "")
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/^#{1,6}\s*/gm, "")
+      .replace(/[*_`>#-]/g, " ")
+      .replace(/\|/g, " ")
+      .split(/(?<=[.!?])\s+/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 1);
+    if (!chunks.length) return;
+
+    speechState = { speaking: true, resourceId: resource.id };
+    render();
+    toast("Reading the study guide aloud. Press Stop reading to finish.", "info");
+
+    let index = 0;
+    const speakNext = () => {
+      if (!speechState.speaking) return;
+      if (index >= chunks.length) {
+        stopSpeech();
+        return;
+      }
+      const utterance = new window.SpeechSynthesisUtterance(chunks[index]);
+      utterance.rate = 1;
+      utterance.onend = () => {
+        index += 1;
+        speakNext();
+      };
+      utterance.onerror = () => stopSpeech();
+      window.speechSynthesis.speak(utterance);
+    };
+    speakNext();
+  }
+
+  function stopSpeech() {
+    if ("speechSynthesis" in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch (error) {
+        /* nothing to cancel */
+      }
+    }
+    if (!speechState.speaking) return;
+    speechState = { speaking: false, resourceId: null };
+    if (route.name === "kit") render();
+  }
+
   function openAttemptReview(attempt) {
     const rows = (attempt.answers || [])
       .map(
@@ -2844,6 +2944,12 @@ Active transport is the movement of substances against a concentration gradient,
       total: items.length,
       takenAt: new Date().toISOString(),
       secondsUsed,
+      answers: items.map((item, index) => ({
+        question: item.question,
+        given: item.options[examState.answers[index]] || "",
+        expected: item.options[item.answerIndex] || item.answer,
+        correct: examState.answers[index] === item.answerIndex,
+      })),
     });
 
     render();
@@ -3305,6 +3411,16 @@ Active transport is the movement of substances against a concentration gradient,
         );
         break;
       }
+      case "listen-doc": {
+        const resource = store.getResource(id);
+        if (!resource || !resource.document) break;
+        if (speechState.speaking) {
+          stopSpeech();
+          break;
+        }
+        startSpeech(resource);
+        break;
+      }
       case "print-doc": {
         els.view.classList.add("printing");
         setTimeout(() => {
@@ -3439,6 +3555,12 @@ Active transport is the movement of substances against a concentration gradient,
         if (kit) startExam(kit);
         break;
       }
+      case "exam-overview": {
+        examState.status = "idle";
+        examState.result = null;
+        render();
+        break;
+      }
       case "retake-exam": {
         const kit = store.getKit(route.id);
         if (!kit || !kit.exam) break;
@@ -3551,6 +3673,14 @@ Active transport is the movement of substances against a concentration gradient,
         resetQuiz(quizState.kitId);
         render();
         break;
+      case "review-exam-attempt": {
+        const kit = route.name === "kit" ? store.getKit(route.id) : null;
+        const attempt =
+          kit && kit.exam && (kit.exam.attempts || []).find((item) => item.id === id);
+        if (!attempt) break;
+        openAttemptReview(attempt);
+        break;
+      }
       case "review-attempt": {
         const kitId = quizState.kitId || (route.name === "kit" ? route.id : null);
         const kit = kitId ? store.getKit(kitId) : null;
@@ -3821,6 +3951,7 @@ Active transport is the movement of substances against a concentration gradient,
       if (event.key === "Escape") {
         document.body.classList.remove("nav-open");
       }
+      if (route.name !== "kit" || route.tab !== "documents") stopSpeech();
     });
 
     els.modalRoot.addEventListener("keydown", (event) => {

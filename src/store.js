@@ -277,11 +277,27 @@
 
   function normaliseExamAttempt(raw) {
     if (!raw || typeof raw !== "object") return null;
+    const total = Number.isFinite(raw.total) ? raw.total : 0;
+    const correct = Number.isFinite(raw.correct) ? raw.correct : 0;
     return {
-      correct: Number.isFinite(raw.correct) ? raw.correct : 0,
-      total: Number.isFinite(raw.total) ? raw.total : 0,
-      takenAt: str(raw.takenAt),
+      id: str(raw.id) || uid("att"),
+      correct,
+      total,
+      percent: Number.isFinite(raw.percent) ? raw.percent : Math.round((correct / Math.max(1, total)) * 100),
+      takenAt: str(raw.takenAt, now()),
       secondsUsed: Number.isFinite(raw.secondsUsed) ? raw.secondsUsed : 0,
+      answers: arr(raw.answers)
+        .filter((item) => item && typeof item === "object")
+        .map((item) => ({
+          type: "mcq",
+          question: str(item.question),
+          given: str(item.given),
+          expected: str(item.expected),
+          correct: item.correct === true,
+          score: item.correct === true ? 1 : 0,
+          feedback: "",
+          markedBy: "auto",
+        })),
     };
   }
 
@@ -308,6 +324,7 @@
       coverage: normaliseCoverage(raw.coverage),
       failures: normaliseFailures(raw.failures),
       lastAttempt: normaliseExamAttempt(raw.lastAttempt),
+      attempts: arr(raw.attempts).map(normaliseExamAttempt).filter(Boolean).slice(0, MAX_QUIZ_ATTEMPTS),
     };
   }
 
@@ -735,8 +752,13 @@
     const next = normaliseExamAttempt(attempt);
     if (!kit || !kit.exam || !next) return null;
     kit.exam.lastAttempt = next;
+    kit.exam.attempts = [next, ...arr(kit.exam.attempts)].slice(0, MAX_QUIZ_ATTEMPTS);
+    kit.exam.attempts = kit.exam.attempts.map((attempt) =>
+      attempt.id === next.id ? next : attempt,
+    );
     kit.updatedAt = now();
     touchKit(kitId);
+    recordActivity("exams");
     commit();
     return next;
   }
