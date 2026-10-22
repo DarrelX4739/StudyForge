@@ -847,6 +847,43 @@
     padding:4px 14px;max-width:max-content;
   }
 
+  /* Find in guide */
+  .doc-find-wrap{position:relative;display:inline-flex;align-items:center}
+  .doc-find-wrap input{
+    width:170px;padding:6px 54px 6px 10px;border-radius:8px;border:1px solid var(--line-2);
+    background:var(--panel-2);color:var(--text);font:inherit;font-size:.8rem;
+  }
+  .doc-find-wrap input:focus{outline:none;box-shadow:var(--ring);border-color:var(--accent)}
+  .doc-find-count{
+    position:absolute;right:8px;font-size:.7rem;color:var(--muted-2);font-variant-numeric:tabular-nums;
+    pointer-events:none;
+  }
+  mark.doc-hit{background:color-mix(in srgb,var(--accent) 26%,transparent);color:inherit;border-radius:3px;padding:0 1px}
+  mark.doc-hit.current{background:var(--accent);color:var(--accent-ink)}
+
+  /* Kit notes */
+  .kit-notes{
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:0 16px;margin-bottom:16px;box-shadow:var(--shadow);
+  }
+  .kit-notes[open]{padding:9px 16px 14px}
+  .kit-notes summary{
+    display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:620;font-size:.9rem;
+    padding:9px 0;list-style:none;
+  }
+  .kit-notes summary::-webkit-details-marker{display:none}
+  .kit-notes summary::before{content:"▸";color:var(--muted-2);font-size:.8rem;transition:transform .15s ease}
+  .kit-notes[open] summary::before{transform:rotate(90deg)}
+  .kit-notes textarea{
+    width:100%;resize:vertical;padding:10px 12px;border-radius:10px;border:1px solid var(--line-2);
+    background:var(--panel-2);color:var(--text);font:inherit;font-size:.88rem;line-height:1.55;
+  }
+  .kit-notes textarea:focus{outline:none;box-shadow:var(--ring);border-color:var(--accent)}
+  .kit-notes .row{margin-top:8px;align-items:center}
+  @media (max-width:560px){
+    .doc-find-wrap input{width:120px}
+  }
+
   /* Reading comfort */
   .doc-head-actions{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
   .doc-read-controls{margin-top:0;justify-content:flex-end}
@@ -1123,14 +1160,14 @@
       done = true;
       console.warn("[StudyForge] " + reason + "; loading the project files directly.");
       [
-        "./src/store.js?v=2026-10-22d",
-        "./src/local.js?v=2026-10-22d",
-        "./src/markdown.js?v=2026-10-22d",
-        "./src/ocr.js?v=2026-10-22d",
-        "./src/ai.js?v=2026-10-22d",
-        "./src/jobs.js?v=2026-10-22d",
-        "./src/ui.js?v=2026-10-22d",
-        "./src/main.js?v=2026-10-22d",
+        "./src/store.js?v=2026-10-22e",
+        "./src/local.js?v=2026-10-22e",
+        "./src/markdown.js?v=2026-10-22e",
+        "./src/ocr.js?v=2026-10-22e",
+        "./src/ai.js?v=2026-10-22e",
+        "./src/jobs.js?v=2026-10-22e",
+        "./src/ui.js?v=2026-10-22e",
+        "./src/main.js?v=2026-10-22e",
       ].forEach(function (src) {
         var script = document.createElement("script");
         script.src = src;

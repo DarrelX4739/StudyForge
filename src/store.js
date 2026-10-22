@@ -107,6 +107,8 @@
         name: str(item.name, "Untitled kit"),
         classId: classIds.has(item.classId) ? item.classId : null,
         subject: str(item.subject),
+        // Free-form notes the learner keeps alongside the kit.
+        notes: str(item.notes).slice(0, 20000),
         createdAt: str(item.createdAt, now()),
         updatedAt: str(item.updatedAt, now()),
         quiz: normaliseQuiz(item.quiz),
@@ -519,6 +521,7 @@
     if (typeof patch.name === "string" && patch.name.trim()) kit.name = patch.name.trim();
     if ("classId" in patch) kit.classId = patch.classId && getClass(patch.classId) ? patch.classId : null;
     if (typeof patch.subject === "string") kit.subject = patch.subject.trim();
+    if (typeof patch.notes === "string") kit.notes = patch.notes.slice(0, 20000);
     kit.updatedAt = now();
     commit();
     return kit;

@@ -187,6 +187,42 @@ const modal = () => window.document.getElementById("modal-root");
     check("Esc leaves focus mode", !window.document.body.classList.contains("doc-focus"));
   }
 
+  // ---------- find in guide ----------
+  window.location.hash = `#/kit/${kit.id}/documents`;
+  await wait(150);
+  const findBox = view().querySelector("[data-doc-find]");
+  check("find box exists", Boolean(findBox));
+  if (findBox) {
+    findBox.value = "photosynthesis";
+    findBox.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await wait(400);
+    const hits = view().querySelectorAll("mark.doc-hit").length;
+    check("find highlights matches", hits > 0, `${hits} hits`);
+    check("find shows a match counter", /1\/\d+/.test((view().querySelector("[data-doc-find-count]") || {}).textContent || ""));
+    findBox.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await wait(120);
+    check("Enter moves to the next match", /2\/\d+/.test((view().querySelector("[data-doc-find-count]") || {}).textContent || ""));
+    findBox.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await wait(120);
+    check("Escape clears the highlighting", view().querySelectorAll("mark.doc-hit").length === 0);
+  }
+
+  // ---------- kit notes ----------
+  window.location.hash = `#/kit/${kit.id}`;
+  await wait(150);
+  const noteBox = view().querySelector("[data-kit-notes]");
+  check("kit notes box exists", Boolean(noteBox));
+  if (noteBox) {
+    noteBox.value = "Remember: chloroplasts are where photosynthesis happens.";
+    noteBox.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await wait(80);
+    check("notes show an unsaved state", /Unsaved/.test(view().querySelector("[data-notes-status]").textContent));
+    view().querySelector('[data-action="save-notes"]').click();
+    await wait(150);
+    check("notes are saved", store.getKit(kit.id).notes.startsWith("Remember:"), store.getKit(kit.id).notes);
+    check("notes word count updates", /6 words/.test(view().querySelector("[data-notes-count]").textContent), view().querySelector("[data-notes-count]").textContent);
+  }
+
   // ---------- attempt review ----------
   window.location.hash = `#/kit/${kit.id}/questions`;
   await wait(120);

@@ -1019,6 +1019,7 @@ Active transport is the movement of substances against a concentration gradient,
         </div>
       </header>
       ${kitTabs(kit, resources, tab)}
+      ${renderKitNotes(kit)}
       ${
         tab === "documents"
           ? renderKitDocuments(kit, resources)
@@ -1031,6 +1032,26 @@ Active transport is the movement of substances against a concentration gradient,
                 : renderKitResources(kit, resources)
       }`;
     return page;
+  }
+
+  /** A scratch pad that belongs to the kit, not to any one resource. */
+  function renderKitNotes(kit) {
+    const notes = kit.notes || "";
+    const words = notes.trim() ? notes.trim().split(/\s+/).length : 0;
+    return `
+      <details class="kit-notes" ${notes ? "open" : ""}>
+        <summary>
+          My notes
+          <span class="count" data-notes-count>${words ? `${plural(words, "word")}` : "empty"}</span>
+        </summary>
+        <textarea data-kit-notes data-id="${esc(kit.id)}" rows="6"
+          placeholder="What did your teacher stress? What keeps slipping? Anything you want next to this kit."
+        >${esc(notes)}</textarea>
+        <div class="row tight">
+          <button class="btn small" data-action="save-notes" data-id="${esc(kit.id)}">Save notes</button>
+          <span class="muted tiny" data-notes-status>${notes ? "Saved in this browser." : "Saved automatically when you leave the box."}</span>
+        </div>
+      </details>`;
   }
 
   function renderKitResources(kit, resources) {
@@ -1127,6 +1148,10 @@ Active transport is the movement of substances against a concentration gradient,
               <button class="btn small" data-action="download-doc" data-id="${esc(selected.id)}">Download .md</button>
             </div>
             <div class="row tight doc-read-controls">
+              <span class="doc-find-wrap">
+                <input type="search" data-doc-find placeholder="Find in guide…" aria-label="Find in the study guide" autocomplete="off" spellcheck="false">
+                <span class="doc-find-count" data-doc-find-count></span>
+              </span>
               <span class="muted tiny">Text</span>
               <button class="icon-btn small" data-action="doc-smaller" title="Smaller text" aria-label="Smaller text">A−</button>
               <button class="icon-btn small" data-action="doc-bigger" title="Bigger text" aria-label="Bigger text">A+</button>
@@ -2606,6 +2631,90 @@ Active transport is the movement of substances against a concentration gradient,
   }
 
   /** Read back a saved attempt: your answer next to the model answer. */
+  /* --------------------------- find in guide ------------------------ */
+
+  let docFind = { timer: 0, matches: [], index: 0 };
+
+  function scheduleDocFind(value) {
+    clearTimeout(docFind.timer);
+    docFind.timer = setTimeout(() => applyDocFind(String(value || "").trim()), 150);
+  }
+
+  function updateDocFindCounter() {
+    const counter = els.view.querySelector("[data-doc-find-count]");
+    if (!counter) return;
+    counter.textContent = docFind.matches.length
+      ? `${docFind.index + 1}/${docFind.matches.length}`
+      : "";
+  }
+
+  /** Undo any highlighting, leaving the rendered guide exactly as it was. */
+  function clearDocFind() {
+    const body = els.view.querySelector("[data-doc-body]");
+    if (body) {
+      body.querySelectorAll("mark.doc-hit").forEach((mark) => {
+        mark.replaceWith(document.createTextNode(mark.textContent));
+      });
+      body.normalize();
+    }
+    docFind.matches = [];
+    docFind.index = 0;
+    updateDocFindCounter();
+  }
+
+  /** Highlight every occurrence of the query inside the guide and jump to the first. */
+  function applyDocFind(query) {
+    const body = els.view.querySelector("[data-doc-body]");
+    if (!body) return;
+    clearDocFind();
+    if (query.length < 2) return;
+    const needle = query.toLowerCase();
+    const walker = document.createTreeWalker(body, 4 /* NodeFilter.SHOW_TEXT */, null);
+    const nodes = [];
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      const parent = node.parentElement;
+      if (!node.nodeValue.trim() || !parent) continue;
+      if (/^(SCRIPT|STYLE|MARK)$/.test(parent.tagName)) continue;
+      if (node.nodeValue.toLowerCase().includes(needle)) nodes.push(node);
+    }
+    for (const node of nodes) {
+      const text = node.nodeValue;
+      const lower = text.toLowerCase();
+      const fragment = document.createDocumentFragment();
+      let start = 0;
+      let at = lower.indexOf(needle, start);
+      while (at !== -1) {
+        if (at > start) fragment.appendChild(document.createTextNode(text.slice(start, at)));
+        const mark = document.createElement("mark");
+        mark.className = "doc-hit";
+        mark.textContent = text.slice(at, at + needle.length);
+        fragment.appendChild(mark);
+        start = at + needle.length;
+        at = lower.indexOf(needle, start);
+      }
+      if (start < text.length) fragment.appendChild(document.createTextNode(text.slice(start)));
+      node.replaceWith(fragment);
+    }
+    docFind.matches = [...body.querySelectorAll("mark.doc-hit")];
+    docFind.index = 0;
+    focusDocMatch();
+  }
+
+  function focusDocMatch() {
+    docFind.matches.forEach((mark, index) => mark.classList.toggle("current", index === docFind.index));
+    const current = docFind.matches[docFind.index];
+    if (current) current.scrollIntoView({ block: "center", behavior: "smooth" });
+    updateDocFindCounter();
+  }
+
+  function stepDocFind(direction) {
+    if (!docFind.matches.length) return;
+    const length = docFind.matches.length;
+    docFind.index = (docFind.index + direction + length) % length;
+    focusDocMatch();
+  }
+
   /* --------------------------- read aloud --------------------------- */
 
   /**
@@ -3825,6 +3934,10 @@ Active transport is the movement of substances against a concentration gradient,
         toast("Document saved.", "success");
         break;
       }
+      case "save-notes": {
+        saveKitNotes(id);
+        break;
+      }
       case "clear-search": {
         query = "";
         if (els.search) els.search.value = "";
@@ -4227,7 +4340,34 @@ Active transport is the movement of substances against a concentration gradient,
   }
 
   /** Keep short-answer text in state as it is typed, and gate the Next button. */
+  /** Persist the kit scratch pad and refresh its word count. */
+  function saveKitNotes(kitId) {
+    const box = els.view.querySelector("[data-kit-notes]");
+    if (!box || !kitId) return;
+    store.updateKit(kitId, { notes: box.value });
+    const count = els.view.querySelector("[data-notes-count]");
+    const words = box.value.trim() ? box.value.trim().split(/\s+/).length : 0;
+    if (count) count.textContent = words ? `${words} word${words === 1 ? "" : "s"}` : "empty";
+    const status = els.view.querySelector("[data-notes-status]");
+    if (status) status.textContent = "Saved.";
+    toast("Notes saved.", "success");
+  }
+
   function onInput(event) {
+    const notes = event.target.closest("[data-kit-notes]");
+    if (notes) {
+      const count = els.view.querySelector("[data-notes-count]");
+      const words = notes.value.trim() ? notes.value.trim().split(/\s+/).length : 0;
+      if (count) count.textContent = words ? `${words} word${words === 1 ? "" : "s"}` : "empty";
+      const status = els.view.querySelector("[data-notes-status]");
+      if (status) status.textContent = "Unsaved…";
+      return;
+    }
+    const find = event.target.closest("[data-doc-find]");
+    if (find) {
+      scheduleDocFind(find.value);
+      return;
+    }
     const field = event.target.closest("[data-quiz-input]");
     if (!field || quizState.status !== "running") return;
     quizState.answers[quizState.index] = { text: field.value };
@@ -4474,6 +4614,19 @@ Active transport is the movement of substances against a concentration gradient,
             event.preventDefault();
             next.click();
           }
+          return;
+        }
+      }
+      if (event.target && event.target.matches && event.target.matches("[data-doc-find]")) {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          stepDocFind(event.shiftKey ? -1 : 1);
+          return;
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.target.value = "";
+          clearDocFind();
           return;
         }
       }

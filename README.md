@@ -93,7 +93,9 @@ A modern, responsive layout with a grouped sidebar:
 - **Classes** group kits (e.g. *Year 11 Biology*). Create, rename and delete classes; kits are moved
   between classes from the dashboard or the kit page.
 - **Rename** kits, edit their subject/focus, move them, delete them.
-- **Search** (⌘K / Ctrl-K) matches kit names, subjects and resource names.
+- **My notes** on every kit: a scratch pad for what your teacher stressed or what keeps slipping,
+  saved with the kit in this browser.
+- **Search** (⌘K / Ctrl-K) matches kit names, subjects, resource names and guide text.
 - **Export / Import** a JSON backup of everything.
 - **Shortcuts** (sidebar) or **?** lists every keyboard shortcut: ⌘K search, 1–4 answers,
   Enter to mark, Space to flip, ←/→ cards.
@@ -148,6 +150,8 @@ sections, each of which becomes part of one complete Markdown study document.
   the browser reads the guide aloud, offline, with no key.
 - Reading controls: **A− / A+** for text size (remembered) and **Focus** to hide the whole app except
   the guide (Esc brings it back).
+- **Find in guide** highlights every match as you type, shows `3/12`, and Enter / Shift-Enter jumps
+  between hits (Esc clears).
 - The document is saved to `localStorage`; **the uploaded file and its raw extracted text are not**.
 
 ### Quiz (per study kit)
