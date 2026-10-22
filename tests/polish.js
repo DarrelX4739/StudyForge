@@ -180,6 +180,31 @@ const modal = () => window.document.getElementById("modal-root");
   await wait(120);
   check("dashboard counts the attempt", /Quiz attempts/.test(view().textContent));
 
+  // ---------- undo a delete ----------
+  window.location.hash = "#/";
+  await wait(150);
+  const kitsBefore = store.get().kits.length;
+  const temp = store.addKit({ name: "Throwaway kit", subject: "Testing" });
+  window.location.hash = `#/kit/${temp.id}`;
+  await wait(150);
+  const delBtn = view().querySelector('[data-action="delete-kit"]');
+  check("kit can be deleted", Boolean(delBtn));
+  if (delBtn) {
+    delBtn.click();
+    await wait(120);
+    window.document.querySelector("#modal-root [data-confirm]").click();
+    await wait(200);
+    check("delete removes the kit", store.get().kits.length === kitsBefore);
+    const undoBtn = window.document.querySelector("#toasts .toast-action");
+    check("toast offers undo", Boolean(undoBtn), undoBtn ? undoBtn.textContent : "");
+    if (undoBtn) {
+      undoBtn.click();
+      await wait(200);
+      check("undo brings the kit back", store.get().kits.length === kitsBefore + 1);
+      check("undo restores the kit name", store.get().kits.some((entry) => entry.name === "Throwaway kit"));
+    }
+  }
+
   // ---------- reading controls ----------
   window.location.hash = `#/kit/${kit.id}/documents`;
   await wait(150);

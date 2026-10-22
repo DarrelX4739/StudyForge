@@ -2422,15 +2422,49 @@ Active transport is the movement of substances against a concentration gradient,
    * Toasts and modals
    * ------------------------------------------------------------------ */
 
-  function toast(message, type = "info") {
+  function toast(message, type = "info", action = null) {
     const node = document.createElement("div");
     node.className = `toast ${type}`;
-    node.textContent = message;
-    els.toasts.appendChild(node);
-    setTimeout(() => {
+    const label = document.createElement("span");
+    label.textContent = message;
+    node.appendChild(label);
+    const lifetime = action ? 9000 : 4200;
+    let timer = null;
+    const dismiss = () => {
+      if (timer) clearTimeout(timer);
       node.classList.add("leaving");
       setTimeout(() => node.remove(), 250);
-    }, 4200);
+    };
+    if (action) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "toast-action";
+      button.textContent = action.label;
+      button.addEventListener("click", () => {
+        dismiss();
+        action.onClick();
+      });
+      node.appendChild(button);
+    }
+    els.toasts.appendChild(node);
+    timer = setTimeout(dismiss, lifetime);
+  }
+
+  /**
+   * Deleting is the one destructive action here, so give it a real undo: the
+   * whole state is snapshotted first and put back by the toast button.
+   */
+  function undoableDelete(apply, description) {
+    const snapshot = JSON.parse(store.exportData());
+    apply();
+    toast(description, "success", {
+      label: "Undo",
+      onClick: () => {
+        store.restore(snapshot);
+        render();
+        toast("Restored.", "info");
+      },
+    });
   }
 
   /** Where focus was before the dialog opened, so it can be put back. */
@@ -4105,9 +4139,8 @@ Active transport is the movement of substances against a concentration gradient,
           confirmLabel: "Delete kit",
           danger: true,
           onConfirm: () => {
-            store.deleteKit(id);
+            undoableDelete(() => store.deleteKit(id), "Study kit deleted.");
             if (route.name === "kit" && route.id === id) navigate("#/");
-            toast("Study kit deleted.", "success");
           },
         });
         break;
@@ -4121,9 +4154,8 @@ Active transport is the movement of substances against a concentration gradient,
           confirmLabel: "Delete class",
           danger: true,
           onConfirm: () => {
-            store.deleteClass(id);
+            undoableDelete(() => store.deleteClass(id), "Class deleted.");
             if (filterClassId === id) filterClassId = null;
-            toast("Class deleted.", "success");
           },
         });
         break;
@@ -4707,7 +4739,10 @@ Active transport is the movement of substances against a concentration gradient,
       }
       case "delete-quiz-attempt": {
         const kitId = quizState.kitId || (route.name === "kit" ? route.id : null);
-        if (kitId && store.deleteKitQuizAttempt(kitId, id)) toast("Attempt deleted.", "success");
+        if (kitId) {
+          undoableDelete(() => store.deleteKitQuizAttempt(kitId, id), "Attempt deleted.");
+          render();
+        }
         break;
       }
       default:

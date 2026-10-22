@@ -916,6 +916,18 @@
     return JSON.stringify({ app: "studyforge", exportedAt: now(), data: state }, null, 2);
   }
 
+  /**
+   * Replace everything with a snapshot taken moments earlier. Only used by the
+   * undo button on a delete, so it stays deliberately blunt.
+   */
+  function restore(snapshot) {
+    const data = snapshot && snapshot.data ? snapshot.data : snapshot;
+    if (!data || typeof data !== "object") return false;
+    state = normalise(data);
+    commit();
+    return true;
+  }
+
   /** Merge an exported backup into the current state. Returns counts. */
   function importData(json) {
     let parsed;
@@ -1022,6 +1034,7 @@
     DEFAULT_PROVIDER,
     exportData,
     importData,
+    restore,
     storageBytes,
     getStorageError: () => storageError,
   };
