@@ -149,6 +149,13 @@ async function playQuiz({ pick = 0 } = {}) {
     check("hardest mode still shows a card", Boolean(view().querySelector(".flashcard")));
   }
 
+  // ---------- week strip ----------
+  window.location.hash = "#/";
+  await wait(150);
+  const strip = view().querySelector(".week-strip");
+  check("next-seven-days strip renders", Boolean(strip), strip ? strip.textContent.replace(/\s+/g, " ").slice(0, 60) : "");
+  check("strip has seven days", view().querySelectorAll(".week-day").length === 7);
+
   const schedule = store.deckSchedule(kit.id);
   check("schedule summary", schedule.total > 0 && schedule.due >= 0 && "later" in schedule, JSON.stringify(schedule));
 

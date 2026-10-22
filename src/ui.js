@@ -691,6 +691,7 @@ Active transport is the movement of substances against a concentration gradient,
       }
       ${renderStreakStrip(state)}
       ${renderDuePanel(state)}
+      ${renderWeekStrip(state)}
       ${renderContinueCard(state)}
       ${
         state.kits.length
@@ -786,6 +787,56 @@ Active transport is the movement of substances against a concentration gradient,
           </div>
         </div>
         <button class="btn primary small" data-action="review-all-due" data-id="${esc(best.kit.id)}">Review now</button>
+      </section>`;
+  }
+
+  /**
+   * How the next seven days of revision look: one chip per day with the number
+   * of cards coming back, today highlighted.
+   */
+  function renderWeekStrip(state) {
+    if (!state.kits.length || query || filterClassId) return "";
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const buckets = [];
+    for (let offset = 0; offset < 7; offset += 1) {
+      const date = new Date(start.getTime() + offset * 86400000);
+      buckets.push({
+        date,
+        key: store.dayKey(date),
+        label: offset === 0 ? "Today" : date.toLocaleDateString(undefined, { weekday: "short" }),
+        count: 0,
+      });
+    }
+    for (const kit of state.kits) {
+      const deck = kit.flashcards;
+      if (!deck) continue;
+      const ratings = deck.ratings || {};
+      for (const card of deck.items) {
+        const rating = ratings[cardKey(card)];
+        if (!rating) {
+          buckets[0].count += 1;
+          continue;
+        }
+        const key = store.dayKey(new Date(rating.dueAt));
+        const bucket = buckets.find((entry) => entry.key === key);
+        if (bucket) bucket.count += 1;
+      }
+    }
+    const total = buckets.reduce((sum, bucket) => sum + bucket.count, 0);
+    if (!total) return "";
+    return `
+      <section class="week-strip" aria-label="Revision coming up this week">
+        <span class="week-label">Next 7 days</span>
+        ${buckets
+          .map(
+            (bucket, index) => `
+              <span class="week-day ${bucket.count ? "has" : ""} ${index === 0 ? "today" : ""}">
+                <span class="week-day-name">${esc(bucket.label)}</span>
+                <span class="week-day-count">${bucket.count || "—"}</span>
+              </span>`,
+          )
+          .join("")}
       </section>`;
   }
 
@@ -1611,6 +1662,13 @@ Active transport is the movement of substances against a concentration gradient,
           </div>
           <div class="row tight">
             <button class="btn primary" data-action="practise-missed" ${attempt.correct === attempt.total ? "disabled" : ""}>Practise missed</button>
+            ${
+              store.deckSchedule(kit.id).due
+                ? `<button class="btn" data-action="review-all-due" data-id="${esc(kit.id)}">Revise ${store.deckSchedule(kit.id).due} card${
+                    store.deckSchedule(kit.id).due === 1 ? "" : "s"
+                  }</button>`
+                : ""
+            }
             <button class="btn" data-action="retry-quiz">Try again</button>
             <button class="btn ghost" data-action="quiz-back">Back to overview</button>
           </div>

@@ -69,6 +69,7 @@ A modern, responsive layout with a grouped sidebar:
   driven by real actions (guides generated, cards rated, quizzes finished).
 - **Continue card** jumps straight back into the kit you last worked on.
 - **Cards due** panel totals every card waiting for review and starts a due-only session in one click.
+- **Next 7 days** strip shows how many cards come back each day, so a revision plan is visible at a glance.
 - **Study now** on any kit does the right next thing: due cards if any are waiting, otherwise the quiz.
 
 - **Sidebar** — *Overview* (Dashboard) and an expandable **Classes** tree: click a class to open its
@@ -227,10 +228,13 @@ merged, de-duplicated by prompt and interleaved so the deck is not grouped by re
 - **Shuffle** randomises the order, **Restart** returns to the first card, **Browse all** switches to a
   plain list, and the deck can be downloaded as Markdown.
 - Progress (card *n* of *N*, cards known, cards to review) is shown above the card.
-- **Spaced review** is automatic. "Got it" schedules the card further out (3 days, then longer, up to
-  30); "Still learning" brings it back in ten minutes. Ratings are saved per card, keyed by its
-  prompt, so regenerating a deck keeps your progress. **Review N due** starts a session with only the
-  cards that are due, and **Reset progress** clears the schedule.
+- **Spaced review** is automatic and SM-2 style: each success multiplies the card's interval by its
+  ease factor (roughly 3 days, then 8, then 20…, capped at 60), while "Still learning" brings it back
+  in ten minutes and lowers that card's ease so it returns more often. Ratings are saved per card,
+  keyed by its prompt, so regenerating a deck keeps your progress. After rating, the deck tells you
+  exactly when that card comes back.
+- **Review N due** starts a session with only the cards that are due, **Hardest** revisits the cards
+  you keep lapsing on, and **Reset progress** clears the schedule.
 
 ### Practice test (per study kit)
 
