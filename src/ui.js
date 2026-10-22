@@ -574,6 +574,30 @@
     }
   }
 
+  /**
+   * Editing a guide makes the cards and questions out of date. Offer a rebuild
+   * rather than silently leaving them stale.
+   */
+  function offerRegenerate(kitId) {
+    const kit = store.getKit(kitId);
+    if (!kit || (!kit.quiz && !kit.flashcards)) return;
+    openModal({
+      title: "Rebuild the study material?",
+      confirmLabel: "Rebuild now",
+      cancelLabel: "Not now",
+      body: `<p>You changed the guide. The flashcards${kit.quiz ? " and quiz questions" : ""} in
+        <strong>${esc(kit.name)}</strong> were written from the old version.</p>
+        <p class="muted small">Rebuilding keeps your review history for cards whose prompt has not changed.</p>`,
+      onConfirm: () => {
+        const fresh = store.getKit(kitId);
+        if (!fresh) return;
+        jobs.makeFlashcards(fresh, Math.max(10, (fresh.flashcards && fresh.flashcards.items.length) || 20), store.getSettings().flashcardStyle || "vocab");
+        if (fresh.quiz) jobs.makeQuiz(fresh, Math.max(5, fresh.quiz.items.length || 10), "");
+        toast("Rebuilding from the updated guide…");
+      },
+    });
+  }
+
   function openSelectionCard(kitId, text) {
     const kit = kitId ? store.getKit(kitId) : null;
     if (!kit) return;
@@ -5320,9 +5344,21 @@ Active transport is the movement of substances against a concentration gradient,
       case "save-doc": {
         const textarea = els.view.querySelector(`[data-doc-id="${id}"]`);
         if (!textarea) break;
+        const resource = store.getResource(id);
+        const kitId = resource && resource.kitId;
+        // Keep the original so a stray save can be undone.
+        const previous = resource && resource.document ? resource.document : "";
         store.setResourceDocument(id, textarea.value);
         editingDocId = null;
-        toast("Document saved.", "success");
+        toast("Document saved.", "success", {
+          label: "Undo",
+          onClick: () => {
+            store.setResourceDocument(id, previous);
+            render();
+            toast("Guide restored.", "info");
+          },
+        });
+        if (kitId) offerRegenerate(kitId);
         break;
       }
       case "save-notes": {

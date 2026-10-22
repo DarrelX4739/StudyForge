@@ -523,6 +523,45 @@ const modal = () => window.document.getElementById("modal-root");
     check("the button switches to Hide", revealBtn.textContent === "Hide answer");
   }
 
+  // ---------- editing a guide offers a rebuild ----------
+  const editResourceId = store.resourcesInKit(kit.id)[0].id;
+  window.location.hash = `#/resource/${editResourceId}`;
+  await wait(200);
+  const editBtn = view().querySelector('[data-action="edit-doc"]');
+  check("the guide can be edited", Boolean(editBtn));
+  if (editBtn) {
+    editBtn.click();
+    await wait(150);
+    const editor = view().querySelector("[data-doc-id]");
+    check("the guide editor opens", Boolean(editor));
+    if (editor) {
+      editor.value = `${editor.value}\n\nA sentence I added myself.`;
+      view().querySelector('[data-action="save-doc"]').click();
+      await wait(200);
+      const rebuild = window.document.querySelector("#modal-root [data-confirm]");
+      check("saving asks whether to rebuild the material", Boolean(rebuild));
+      if (rebuild) {
+        window.document.querySelector("#modal-root [data-cancel], #modal-root [data-close]")?.click();
+        const stillOpen = Boolean(window.document.querySelector("#modal-root [data-confirm]"));
+        if (stillOpen) {
+          // No cancel button exposed: close it the way a user would.
+          window.document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+          await wait(150);
+        }
+      }
+      const undoToast = [...window.document.querySelectorAll("#toasts .toast-action")].pop();
+      check("the guide save offers undo", Boolean(undoToast));
+      if (undoToast) {
+        undoToast.click();
+        await wait(200);
+        check(
+          "undo restores the previous guide",
+          !String((store.resourcesInKit(kit.id)[0] || {}).document || "").includes("A sentence I added myself."),
+        );
+      }
+    }
+  }
+
   // ---------- select text → make a card ----------
   window.location.hash = `#/kit/${kit.id}/documents`;
   await wait(180);
