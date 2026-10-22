@@ -223,6 +223,7 @@ merged, de-duplicated by prompt and interleaved so the deck is not grouped by re
 - Each card is one fact: a **front** you are cued with and a **back** you try to recall.
 - Choose 10, 20, 30 or 40 cards.
 - **Print deck** produces a clean two-column sheet of every prompt and answer for offline revision.
+- **Edit card** fixes a prompt or answer in place; the card keeps its review schedule.
 - **Two deck styles**, set under **Settings → Flashcards**:
   - **Vocabulary & concepts** — the front is the *term or concept* (no question mark), the back is its
     definition or explanation. Best for definitions, names and key ideas.

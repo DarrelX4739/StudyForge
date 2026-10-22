@@ -1989,6 +1989,7 @@ Active transport is the movement of substances against a concentration gradient,
               ? `<button class="btn small ghost" data-action="reset-progress">Reset progress</button>`
               : ""
           }
+          <button class="btn small ghost" data-action="edit-card">Edit card</button>
           <button class="btn small ghost" data-action="deck-list">${
             flashState.showList ? "Back to card" : "Browse all"
           }</button>
@@ -4176,6 +4177,47 @@ Active transport is the movement of substances against a concentration gradient,
       case "card-again":
         markCard("again");
         break;
+      case "edit-card": {
+        const kit = store.getKit(route.id);
+        if (!kit || !kit.flashcards) break;
+        const order = deckOrder(kit);
+        const index = order[Math.min(flashState.index, order.length - 1)];
+        const card = kit.flashcards.items[index];
+        if (!card) break;
+        openModal({
+          title: "Edit this card",
+          confirmLabel: "Save card",
+          body: `
+            <div class="field"><label for="edit-front">Prompt</label>
+              <input id="edit-front" type="text" value="${esc(card.front)}"></div>
+            <div class="field"><label for="edit-back">Answer</label>
+              <textarea id="edit-back" rows="4">${esc(card.back)}</textarea></div>
+            <p class="hint">Fixing a card keeps your review progress for it.</p>`,
+          onConfirm: (root) => {
+            const front = root.querySelector("#edit-front").value.trim();
+            const back = root.querySelector("#edit-back").value.trim();
+            if (!front || !back) {
+              toast("A card needs both a prompt and an answer.", "error");
+              return false;
+            }
+            const items = kit.flashcards.items.map((item, itemIndex) =>
+              itemIndex === index ? { ...item, front, back } : item,
+            );
+            // Ratings are keyed by the prompt, so carry the schedule across when
+            // the prompt itself is corrected.
+            const ratings = { ...(kit.flashcards.ratings || {}) };
+            const oldKey = cardKey(card);
+            const newKey = cardKey({ front });
+            if (oldKey !== newKey && ratings[oldKey]) {
+              ratings[newKey] = ratings[oldKey];
+              delete ratings[oldKey];
+            }
+            store.setKitFlashcards(kit.id, { ...kit.flashcards, items, ratings });
+            toast("Card updated.", "success");
+          },
+        });
+        break;
+      }
       case "reset-progress": {
         const kit = store.getKit(route.id);
         if (!kit) break;

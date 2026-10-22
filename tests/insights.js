@@ -150,6 +150,29 @@ async function playQuiz({ pick = 0 } = {}) {
     check("hardest mode still shows a card", Boolean(view().querySelector(".flashcard")));
   }
 
+  // ---------- editing a card ----------
+  window.location.hash = `#/kit/${kit.id}/flashcards`;
+  await wait(150);
+  const editBtn = view().querySelector('[data-action="edit-card"]');
+  check("deck offers card editing", Boolean(editBtn));
+  if (editBtn) {
+    const before = store.getKit(kit.id).flashcards.items[0].front;
+    editBtn.click();
+    await wait(120);
+    const front = window.document.querySelector("#modal-root #edit-front");
+    const back = window.document.querySelector("#modal-root #edit-back");
+    check("edit dialog has both fields", Boolean(front && back), before);
+    front.value = "Edited prompt";
+    back.value = "Edited answer";
+    window.document.querySelector("#modal-root [data-confirm]").click();
+    await wait(200);
+    check(
+      "card edit is saved",
+      store.getKit(kit.id).flashcards.items.some((card) => card.front === "Edited prompt"),
+      store.getKit(kit.id).flashcards.items.map((card) => card.front).join(" | "),
+    );
+  }
+
   // ---------- week strip ----------
   window.location.hash = "#/";
   await wait(150);
