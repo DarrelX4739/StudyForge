@@ -1,0 +1,12 @@
+{
+  "name": "studyforge-tests",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Browser test suites for StudyForge — run against the real app files with jsdom.",
+  "scripts": {
+    "test": "node run.js"
+  },
+  "devDependencies": {
+    "jsdom": "^24.1.0"
+  }
+}

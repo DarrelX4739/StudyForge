@@ -1,16 +1,17 @@
 /**
- * StudyForge — NVIDIA NIM client.
+ * StudyForge — generation client.
  *
- * All requests go through the StudyForge Cloudflare Worker
- * (https://symus-backend.chibbit99.workers.dev/api/notes), which forwards them
- * to integrate.api.nvidia.com with the user's own API key.
+ * The app works with no key at all (the on-device engine in src/local.js).
+ * This file adds the optional AI upgrade and routes requests to whichever
+ * provider is selected in Settings:
  *
- * Model: nvidia/nemotron-3.5-lightning-30b-a3b
+ *   gemini      Google AI Studio — browser-friendly, free tier, generous CORS
+ *   openrouter  OpenRouter — many models behind one key, browser-friendly
+ *   nvidia      NVIDIA NIM through the original Cloudflare Worker proxy
+ *   custom      any OpenAI-compatible endpoint (a relay, LM Studio, Ollama…)
  *
- * Three capabilities:
- *   analyseGaps()        — does the PDF text layer miss content? which pages?
- *   generateDocument()   — turn source text into a complete study document
- *   generateQuestions()  — practice questions from that document
+ * Every provider speaks "prompt in, text out" so the prompt builders below do
+ * not care where the answer came from.
  */
 (function (StudyForge) {
   "use strict";
@@ -20,16 +21,113 @@
   const WORKER_URL = CONFIG.workerUrl || "https://symus-backend.chibbit99.workers.dev";
   const DEFAULT_MODEL = CONFIG.model || "nvidia/nemotron-3.5-lightning-30b-a3b";
 
-  // Model families the app offers. The Worker is the source of truth (it returns
-  // the filtered catalogue from /api/models); this list filters defensively in
-  // case the Worker is configured differently. Keep in sync with
-  // DEFAULT_MODEL_FILTER in worker.js.
+  // Model families the Worker offers. Keep in sync with DEFAULT_MODEL_FILTER in
+  // worker.js; only applied to the NVIDIA catalogue.
   const MODEL_FILTER = ["deepseek", "step", "nemotron", "mistral", "gemma", "glm", "muse"];
 
-  /** The model chosen in Settings, falling back to the configured default. */
+  /**
+   * Provider catalogue. `kind` decides the wire format:
+   *   "gemini"  → Google generateContent
+   *   "openai"  → OpenAI-compatible /chat/completions
+   *   "proxy"   → the bundled Cloudflare Worker (NVIDIA NIM passthrough)
+   */
+  const PROVIDERS = {
+    local: {
+      id: "local",
+      label: "On-device",
+      kind: "local",
+      needsKey: false,
+      model: "",
+      blurb: "Runs entirely in this browser. No key, no network, always available.",
+    },
+    gemini: {
+      id: "gemini",
+      label: "Google Gemini",
+      kind: "gemini",
+      needsKey: true,
+      keyLabel: "Gemini API key",
+      keyPlaceholder: "AIza…",
+      keyUrl: "https://aistudio.google.com/app/apikey",
+      model: "gemini-2.0-flash",
+      blurb: "Free tier, works straight from the browser. Best all-round option.",
+    },
+    openrouter: {
+      id: "openrouter",
+      label: "OpenRouter",
+      kind: "openai",
+      needsKey: true,
+      keyLabel: "OpenRouter API key",
+      keyPlaceholder: "sk-or-…",
+      keyUrl: "https://openrouter.ai/keys",
+      base: "https://openrouter.ai/api/v1",
+      model: "nvidia/nemotron-nano-9b-v2:free",
+      blurb: "One key for many models, including free ones. Works from the browser.",
+    },
+    nvidia: {
+      id: "nvidia",
+      label: "NVIDIA NIM (via Worker)",
+      kind: "proxy",
+      needsKey: true,
+      keyLabel: "NVIDIA NIM API key",
+      keyPlaceholder: "nvapi-…",
+      keyUrl: "https://build.nvidia.com/",
+      model: DEFAULT_MODEL,
+      blurb: "Needs the StudyForge Worker deployed — NVIDIA blocks direct browser calls.",
+    },
+    custom: {
+      id: "custom",
+      label: "Custom / relay",
+      kind: "openai",
+      needsKey: false,
+      keyLabel: "API key (optional)",
+      keyPlaceholder: "Bearer token, if your endpoint needs one",
+      model: "default",
+      blurb: "Any OpenAI-compatible endpoint: a relay, LM Studio, Ollama, your own Worker.",
+    },
+  };
+
+  const DEFAULT_PROVIDER = "local";
+
+  function settings() {
+    return (StudyForge.store && StudyForge.store.getSettings && StudyForge.store.getSettings()) || {};
+  }
+
+  function providerId() {
+    const chosen = settings().provider || DEFAULT_PROVIDER;
+    return PROVIDERS[chosen] ? chosen : DEFAULT_PROVIDER;
+  }
+
+  function providerInfo(id) {
+    return PROVIDERS[id || providerId()] || PROVIDERS.local;
+  }
+
+  const providers = () => PROVIDERS;
+
+  /** Human label for the active engine, e.g. "On-device" or "Google Gemini". */
+  function providerLabel() {
+    return providerInfo().label;
+  }
+
+  /** True when an AI provider is selected *and* has what it needs to run. */
+  function isAiEnabled() {
+    const info = providerInfo();
+    if (info.kind === "local") return false;
+    const key = (StudyForge.store && StudyForge.store.getProviderKey && StudyForge.store.getProviderKey()) || "";
+    if (info.kind === "openai" && info.id === "custom") {
+      return Boolean((settings().baseUrl || "").trim());
+    }
+    return Boolean(key.trim());
+  }
+
+  /** The model for the active provider, falling back to its default. */
   function currentModel() {
-    const stored = StudyForge.store && StudyForge.store.getSettings ? StudyForge.store.getSettings().model : "";
-    return (stored || DEFAULT_MODEL).trim();
+    const saved = settings();
+    const id = providerId();
+    const info = providerInfo(id);
+    const perProvider = (saved.modelByProvider && saved.modelByProvider[id]) || "";
+    if (perProvider) return perProvider;
+    if (id === "nvidia") return (saved.model || info.model || DEFAULT_MODEL).trim();
+    return (info.model || "").trim();
   }
 
   function matchesModelFilter(id) {
@@ -65,26 +163,60 @@
     });
   }
 
-  async function requestOnce({ apiKey, prompt, maxTokens, temperature, signal }) {
-    const response = await fetch(WORKER_URL + "/api/notes", {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer " + apiKey,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      signal,
-      body: JSON.stringify({
-        model: currentModel(),
-        messages: [{ role: "user", content: prompt }],
-        chat_template_kwargs: { enable_thinking: false },
-        max_tokens: maxTokens,
-        temperature,
-        top_p: 0.9,
-        stream: false,
-      }),
-    });
+  function baseFor(info, override) {
+    if (info.base) return info.base.replace(/\/+$/, "");
+    const base = (override || settings().baseUrl || "").trim().replace(/\/+$/, "");
+    return base;
+  }
 
+  function headersFor(info, apiKey) {
+    const headers = { "Content-Type": "application/json", Accept: "application/json" };
+    if (apiKey) headers.Authorization = "Bearer " + apiKey;
+    if (info.id === "openrouter") {
+      // Recommended by OpenRouter; harmless elsewhere.
+      headers["HTTP-Referer"] = location.origin;
+      headers["X-Title"] = "StudyForge";
+    }
+    return headers;
+  }
+
+  function httpError(response, data, raw) {
+    const detail =
+      (data && data.error && (data.error.message || data.error)) ||
+      (data && data.message) ||
+      (data && data.detail) ||
+      (raw && raw.slice(0, 200)) ||
+      "HTTP " + response.status;
+    const error = new Error(String(detail));
+    error.status = response.status;
+    error.retryable = response.status === 429 || response.status === 408 || response.status >= 500;
+    return error;
+  }
+
+  /** OpenAI-compatible chat completion (OpenRouter, custom relays, Worker). */
+  async function openAiRequest({ info, apiKey, prompt, maxTokens, temperature, signal, baseUrl, model: modelOverride }) {
+    const endpoint =
+      info.kind === "proxy"
+        ? WORKER_URL + "/api/notes"
+        : `${baseFor(info, baseUrl)}/chat/completions`;
+    const body = {
+      model: modelOverride || currentModel(),
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: maxTokens,
+      temperature,
+      stream: false,
+    };
+    if (info.kind === "proxy") {
+      body.top_p = 0.9;
+      body.chat_template_kwargs = { enable_thinking: false };
+    }
+
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: headersFor(info, apiKey),
+      signal,
+      body: JSON.stringify(body),
+    });
     const raw = await response.text();
     let data = null;
     try {
@@ -92,19 +224,8 @@
     } catch (error) {
       /* handled below */
     }
-
-    if (!response.ok) {
-      const detail =
-        data && data.error && (data.error.message || data.error)
-          ? String(data.error.message || data.error)
-          : "HTTP " + response.status;
-      const error = new Error(detail);
-      error.status = response.status;
-      error.retryable = response.status === 429 || response.status >= 500;
-      if (data && data.detail) error.detail = String(data.detail);
-      throw error;
-    }
-    if (!data) throw new Error("The note service returned an unexpected, non-JSON response.");
+    if (!response.ok) throw httpError(response, data, raw);
+    if (!data) throw new Error("The service returned an unexpected, non-JSON response.");
 
     const choice = data.choices && data.choices[0];
     const content = choice && choice.message ? choice.message.content : "";
@@ -114,15 +235,74 @@
     return { content: content.trim(), truncated: choice.finish_reason === "length" };
   }
 
+  /** Google Gemini generateContent. */
+  async function geminiRequest({ apiKey, prompt, maxTokens, temperature, signal, model: modelOverride }) {
+    const model = String(modelOverride || currentModel()).replace(/^models\//, "");
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+      model,
+    )}:generateContent`;
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      signal,
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature,
+          maxOutputTokens: maxTokens,
+          topP: 0.95,
+        },
+        // Study answers do not need chain-of-thought; this keeps replies JSON-clean.
+        ...(model.startsWith("gemini-2.5") ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+      }),
+    });
+    const raw = await response.text();
+    let data = null;
+    try {
+      data = JSON.parse(raw);
+    } catch (error) {
+      /* handled below */
+    }
+    if (!response.ok) throw httpError(response, data, raw);
+    if (!data) throw new Error("Gemini returned an unexpected, non-JSON response.");
+
+    const candidate = (data.candidates && data.candidates[0]) || null;
+    const text = candidate && candidate.content && Array.isArray(candidate.content.parts)
+      ? candidate.content.parts.map((part) => part.text || "").join("").trim()
+      : "";
+    if (!text) {
+      const blocked = data.promptFeedback && data.promptFeedback.blockReason;
+      throw new Error(blocked ? `Gemini blocked the request (${blocked}).` : "Gemini returned an empty response.");
+    }
+    return { content: text, truncated: candidate.finishReason === "MAX_TOKENS" };
+  }
+
   async function chat(options) {
+    const info = providerInfo();
+    if (info.kind === "local") {
+      const error = new Error("No AI provider is connected. StudyForge is using the on-device engine.");
+      error.code = "local-only";
+      throw error;
+    }
+    const apiKey =
+      options.apiKey ||
+      ((StudyForge.store && StudyForge.store.getProviderKey && StudyForge.store.getProviderKey()) || "");
+    if (info.needsKey && !apiKey.trim()) {
+      const error = new Error(`Add your ${info.keyLabel} in Settings.`);
+      error.code = "missing-key";
+      error.provider = info.id;
+      throw error;
+    }
+
     let attempt = 0;
     for (;;) {
       try {
-        return await requestOnce(options);
+        const request = { ...options, apiKey: apiKey.trim(), info };
+        return info.kind === "gemini" ? await geminiRequest(request) : await openAiRequest(request);
       } catch (error) {
         if (error && error.name === "AbortError") throw error;
         if (!error || !error.retryable || attempt >= MAX_RETRIES) throw error;
-        attempt++;
+        attempt += 1;
         if (options.onRetry) options.onRetry(error, attempt);
         await sleep(RETRY_BASE_MS * attempt, options.signal);
       }
@@ -132,33 +312,65 @@
   function describeError(error) {
     if (!error) return "Unknown error.";
     if (error.name === "AbortError") return "Cancelled.";
-    if (error.status === 401) return "NVIDIA rejected the API key (401). Check the key in Settings.";
-    if (error.status === 402) return "NVIDIA reported a billing/quota problem (402).";
-    if (error.status === 403) {
-      return "The request was refused (403). If the app is served from a new origin, update the worker origin allowlist.";
+    if (error.code === "local-only") return "No AI provider is connected — the on-device engine is being used.";
+    if (error.code === "missing-key") return error.message;
+    const info = providerInfo();
+    const label = info.label;
+    if (error.status === 401 || error.status === 403) {
+      if (info.id === "nvidia" || info.kind === "proxy") {
+        return `The request was refused (${error.status}). The Worker must allow this origin, or the key is invalid.`;
+      }
+      return `${label} rejected the API key (${error.status}). Check it in Settings.`;
     }
-    if (error.status === 404) return "The model is not available to this key (404).";
-    if (error.status === 429) return "Rate limited by NVIDIA (429). Wait a moment and retry.";
-    const base = error.message || String(error);
-    return error.detail ? `${base} ${error.detail}` : base;
+    if (error.status === 402) return `${label} reported a billing or quota problem (402).`;
+    if (error.status === 404) return `${label}: the model is not available to this key (404).`;
+    if (error.status === 429) return `${label} is rate limiting this key (429). Wait a moment and retry.`;
+    if (error instanceof TypeError && /fetch/i.test(error.message)) {
+      return `Could not reach ${label}. Check your connection, or pick a different provider in Settings.`;
+    }
+    return error.message || String(error);
   }
 
   /**
-   * Fetch the model catalogue from the StudyForge Worker.
-   *
-   * The Worker proxies NVIDIA's /v1/models with the caller's key and keeps only
-   * models whose id contains one of MODEL_FILTER. The response is filtered again
-   * here and sorted for display.
-   *
+   * Model catalogue for the active provider.
    * @returns {Promise<{models: Array<{id: string, ownedBy: string}>, filter: string[]}>}
    */
-  async function listModels({ apiKey, signal } = {}) {
-    const response = await fetch(WORKER_URL + "/api/models", {
+  async function listModels({ apiKey, signal, baseUrl } = {}) {
+    const info = providerInfo();
+    if (info.kind === "local") return { models: [], filter: [] };
+
+    const key = (apiKey || (StudyForge.store.getProviderKey && StudyForge.store.getProviderKey()) || "").trim();
+
+    if (info.kind === "gemini") {
+      const response = await fetch(
+        "https://generativelanguage.googleapis.com/v1beta/models?pageSize=100",
+        { headers: { "x-goog-api-key": key }, signal },
+      );
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw httpError(response, data, "");
+      const models = (data.models || [])
+        .filter((entry) => (entry.supportedGenerationMethods || []).includes("generateContent"))
+        .map((entry) => ({ id: String(entry.name || "").replace(/^models\//, ""), ownedBy: "Google" }))
+        .filter((entry) => entry.id);
+      return { models, filter: [] };
+    }
+
+    if (info.id === "openrouter") {
+      const response = await fetch("https://openrouter.ai/api/v1/models", { signal });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw httpError(response, data, "");
+      const models = (data.data || [])
+        .map((entry) => ({ id: entry.id, ownedBy: String(entry.name || "") }))
+        .filter((entry) => entry.id);
+      return { models, filter: [] };
+    }
+
+    const endpoint = info.kind === "proxy" ? WORKER_URL + "/api/models" : `${baseFor(info, baseUrl)}/models`;
+    const response = await fetch(endpoint, {
       method: "GET",
-      headers: { Authorization: "Bearer " + apiKey, Accept: "application/json" },
+      headers: headersFor(info, key),
       signal,
     });
-
     const raw = await response.text();
     let data = null;
     try {
@@ -166,25 +378,14 @@
     } catch (error) {
       /* handled below */
     }
-
-    if (!response.ok) {
-      const detail =
-        data && data.error && (data.error.message || data.error)
-          ? String(data.error.message || data.error) + (data.detail ? " " + data.detail : "")
-          : "HTTP " + response.status;
-      const error = new Error(detail);
-      error.status = response.status;
-      throw error;
-    }
-    if (!data || !Array.isArray(data.models)) {
-      throw new Error("The model service returned an unexpected response.");
-    }
-
-    const models = data.models
-      .filter((entry) => entry && typeof entry.id === "string" && matchesModelFilter(entry.id))
-      .map((entry) => ({ id: entry.id, ownedBy: typeof entry.ownedBy === "string" ? entry.ownedBy : "" }));
-
-    return { models, filter: MODEL_FILTER };
+    if (!response.ok) throw httpError(response, data, raw);
+    const list = data && (Array.isArray(data.models) ? data.models : Array.isArray(data.data) ? data.data : null);
+    if (!list) throw new Error("The model service returned an unexpected response.");
+    const models = list
+      .filter((entry) => entry && typeof entry.id === "string")
+      .map((entry) => ({ id: entry.id, ownedBy: typeof entry.ownedBy === "string" ? entry.ownedBy : "" }))
+      .filter((entry) => (info.kind === "proxy" ? matchesModelFilter(entry.id) : true));
+    return { models, filter: info.kind === "proxy" ? MODEL_FILTER : [] };
   }
 
   /* ------------------------------------------------------------------ *
@@ -627,6 +828,11 @@
   ]);
 
   /** Content words of an answer, used for the offline fallback marker. */
+  /**
+   * Content words of a sentence, crudely stemmed. Used for on-device
+   * short-answer marking, where we can only compare wording — so we lean towards
+   * accepting anything that shares the key ideas.
+   */
   function keywords(text) {
     return new Set(
       String(text || "")
@@ -634,8 +840,26 @@
         .replace(/[^a-z0-9\s'-]/g, " ")
         .split(/\s+/)
         .filter((word) => word.length > 2 && !MARK_STOPWORDS.has(word))
-        .map((word) => word.replace(/(ing|ed|es|s)$/, "")),
+        .map((word) =>
+          word
+            .replace(/['’]s$/, "")
+            .replace(/(ations|ation|ments|ment|ness|ities|ity|ies|ing|ed|ly|es|s)$/, ""),
+        )
+        .filter((word) => word.length > 2),
     );
+  }
+
+  /** Two words count as the same idea when one is a prefix of the other. */
+  function wordsMatch(a, b) {
+    if (a === b) return true;
+    const short = a.length <= b.length ? a : b;
+    const long = short === a ? b : a;
+    return short.length >= 4 && long.startsWith(short);
+  }
+
+  function coversIdea(given, idea) {
+    for (const word of given) if (wordsMatch(word, idea)) return true;
+    return false;
   }
 
   /**
@@ -644,15 +868,25 @@
    * overlap with the key ideas of the model answer.
    */
   function localGradeShortAnswer({ answer, response }) {
-    const expected = keywords(answer);
-    const given = keywords(response);
     const cleaned = (value) =>
       String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const text = String(response || "").trim();
 
-    if (cleaned(response) && cleaned(response) === cleaned(answer)) {
+    if (cleaned(text) && cleaned(text) === cleaned(answer)) {
       return { score: 1, correct: true, feedback: "Exact match with the model answer.", markedBy: "offline" };
     }
-    if (!expected.size) {
+
+    if (cleaned(text).split(" ").filter(Boolean).length < 2) {
+      return {
+        score: 0.1,
+        correct: false,
+        feedback: "That is too short to mark — write at least a sentence in your own words.",
+        markedBy: "offline",
+      };
+    }
+
+    const expected = [...keywords(answer)];
+    if (!expected.length) {
       return {
         score: 0,
         correct: false,
@@ -660,16 +894,25 @@
         markedBy: "offline",
       };
     }
-    let hits = 0;
-    for (const word of expected) if (given.has(word)) hits += 1;
-    const score = hits / expected.size;
-    const correct = score >= 0.55;
+
+    const given = keywords(text);
+    const missing = expected.filter((idea) => !coversIdea(given, idea));
+    const hits = expected.length - missing.length;
+    // Coverage of the model answer's ideas, with a small bonus for adding detail.
+    const coverage = hits / expected.length;
+    const extra = [...given].filter((word) => !expected.some((idea) => wordsMatch(word, idea))).length;
+    const score = Math.max(0, Math.min(1, coverage + Math.min(0.15, extra * 0.02)));
+    const correct = coverage >= 0.55;
+    const missingList = missing.slice(0, 4).join(", ");
+
     return {
       score,
       correct,
       feedback: correct
-        ? `Covers the key idea (${Math.round(score * 100)}% of the key terms). Add your AI key for a fuller review.`
-        : `Missing key ideas from the model answer (${Math.round(score * 100)}% of key terms matched). Add your AI key for a fuller review.`,
+        ? `Covers ${Math.round(coverage * 100)}% of the key ideas. Add your AI key for a fuller review.`
+        : `Matches ${Math.round(coverage * 100)}% of the key ideas${
+            missingList ? ` — missing: ${missingList}` : ""
+          }. Add your AI key for a fuller review.`,
       markedBy: "offline",
     };
   }
@@ -955,6 +1198,12 @@
     WORKER_URL,
     DEFAULT_MODEL,
     MODEL_FILTER,
+    PROVIDERS,
+    providers,
+    providerLabel,
+    providerId,
+    providerInfo,
+    isAiEnabled,
     currentModel,
     listModels,
     matchesModelFilter,

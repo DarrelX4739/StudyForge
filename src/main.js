@@ -16,7 +16,7 @@
   }
   window.__studyForgeBooted = true;
 
-  const REQUIRED = ["store", "md", "ocr", "ai", "jobs", "ui"];
+  const REQUIRED = ["store", "local", "md", "ocr", "ai", "jobs", "ui"];
 
   function showFatal(message) {
     const view = document.getElementById("view");

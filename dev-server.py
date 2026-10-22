@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static development server for Symus Study.
+"""Static development server for StudyForge.
 
 `python3 -m http.server` sends no cache headers, so after you pull a change a
 browser can keep serving the old HTML/JS/CSS and the app looks unchanged. This
@@ -21,6 +21,16 @@ ROOT = Path(__file__).resolve().parent
 
 
 class NoCacheHandler(SimpleHTTPRequestHandler):
+    # Serve the PWA files with the MIME types browsers require: a service worker
+    # sent as application/octet-stream is refused.
+    extensions_map = {
+        **SimpleHTTPRequestHandler.extensions_map,
+        ".js": "text/javascript",
+        ".webmanifest": "application/manifest+json",
+        ".json": "application/json",
+        ".svg": "image/svg+xml",
+    }
+
     def end_headers(self):
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("Pragma", "no-cache")
@@ -32,7 +42,7 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Serve Symus Study without caching.")
+    parser = argparse.ArgumentParser(description="Serve StudyForge without caching.")
     parser.add_argument("port", nargs="?", type=int, default=8000)
     parser.add_argument("--host", default="0.0.0.0")
     args = parser.parse_args()

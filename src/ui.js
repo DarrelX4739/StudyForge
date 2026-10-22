@@ -36,6 +36,37 @@
   let query = "";
   let editingDocId = null;
   let docViewId = null;
+  // Set by the browser when the app is installable; consumed by Settings.
+  let installPrompt = null;
+
+  // Set when the dashboard asks to jump into a due-card review.
+  let pendingDueReview = null;
+  // A due-review session that spans kits: { order: [...], index, total }.
+  let mixedReview = null;
+  // Match game: pair up terms and definitions. Idle unless started from a deck.
+  let matchState = { kitId: null, active: false, tiles: [], picked: [], matched: [], wrong: 0, startedAt: 0, finished: false };
+  let matchTick = null;
+
+  // Read-aloud state for the study guide (uses the browser's own voices).
+  let speechState = { speaking: false, resourceId: null };
+
+  // Reading comfort: text size (remembered) and a distraction-free mode.
+  const DOC_SIZES = [0.88, 0.96, 1.06, 1.18];
+  function readDocSize() {
+    const stored = Number(localStorage.getItem("studyforge.docsize"));
+    return DOC_SIZES.includes(stored) ? stored : 0.96;
+  }
+  function setDocSize(size) {
+    const clamped = Math.min(Math.max(size, DOC_SIZES[0]), DOC_SIZES[DOC_SIZES.length - 1]);
+    try {
+      localStorage.setItem("studyforge.docsize", String(clamped));
+    } catch (error) {
+      /* private mode */
+    }
+    const body = els.view.querySelector("[data-doc-body]");
+    if (body) body.style.fontSize = `${clamped}rem`;
+  }
+
   // Quiz run. One question at a time: the answer is locked and marked the
   // moment "Next" is pressed, and everything is saved when the quiz is
   // submitted at the end.
@@ -47,16 +78,34 @@
     answers: {}, // index -> { choice } | { text }
     results: {}, // index -> { correct, score, feedback, markedBy, expected, given }
     startedAt: 0,
+    questionStartedAt: 0,
     attempt: null,
   };
   // Flashcard deck position, kept per kit while the tab is open.
-  let flashState = { kitId: null, index: 0, flipped: false, order: null, known: {}, again: {}, shuffled: false };
+  let flashState = {
+    kitId: null,
+    index: 0,
+    flipped: false,
+    order: null,
+    known: {},
+    again: {},
+    shuffled: false,
+    typing: false,
+    typed: "",
+    typedVerdict: null,
+    finished: false,
+    unseenMode: false,
+    reversed: false,
+    lastScheduled: null,
+  };
   // Which classes / kits are open in the sidebar tree.
   const sidebarOpen = { classes: new Set(), kits: new Set() };
   let lastSidebarRoute = "";
   // Timed exam session. Lives in memory only: reloading the page abandons a run.
   let examState = { kitId: null, status: "idle", answers: {}, startedAt: 0, endsAt: 0, secondsUsed: 0 };
   let renderQueued = false;
+  // Where the reader was in each study guide, so coming back lands in the same place.
+  const docScroll = {};
   let pendingReprocessId = null;
   let lastQuizKey = null;
   // Cached model catalogue for the Settings selector (per page load).
@@ -81,6 +130,8 @@
     settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 1 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 15a2 2 0 1 1 0-4 1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 4a2 2 0 1 1 4 0 1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.7 1.7 0 0 0 21 11a2 2 0 1 1 0 4Z"/>',
     moon: '<path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/>',
     chevron: '<path d="M9 6l6 6-6 6"/>',
+    keyboard: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01M7 14h10"/>',
+    chart: '<path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15l3-4 3 2 4-6"/>',
     arrowLeft: '<path d="M15 5l-7 7 7 7"/>',
     arrowRight: '<path d="M9 5l7 7-7 7"/>',
     quiz: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.4 2.3c-.6.2-1 .8-1 1.4v.3"/><path d="M12 16.8h.01"/>',
@@ -147,6 +198,8 @@
       route = { name: "kit", id: parts[1], tab };
     } else if (parts[0] === "resource" && parts[1]) {
       route = { name: "resource", id: parts[1] };
+    } else if (parts[0] === "activity") {
+      route = { name: "activity", id: null };
     } else {
       route = { name: "dashboard", id: null };
     }
@@ -162,6 +215,17 @@
       again: {},
       shuffled: false,
       showList: false,
+      reviewMode: false,
+      dueOnly: false,
+      hardMode: false,
+      hardList: null,
+      typing: false,
+      typed: "",
+      typedVerdict: null,
+      finished: false,
+      unseenMode: false,
+      reversed: false,
+      lastScheduled: null,
     };
   }
 
@@ -182,10 +246,146 @@
     };
   }
 
+  /* An unfinished quiz is kept on this device so a reload or an accidental
+     tab close never throws away answers. Only the run in progress is stored. */
+  const QUIZ_DRAFT_KEY = "studyforge.quizdraft.v1";
+
+  function saveQuizDraft() {
+    if (quizState.status !== "running" || !quizState.kitId) return;
+    if (quizState.phase === "marking") return;
+    try {
+      localStorage.setItem(
+        QUIZ_DRAFT_KEY,
+        JSON.stringify({
+          kitId: quizState.kitId,
+          index: quizState.index,
+          phase: quizState.phase,
+          answers: quizState.answers,
+          results: quizState.results,
+          startedAt: quizState.startedAt,
+          items: quizState.items,
+          retry: quizState.retry,
+          savedAt: new Date().toISOString(),
+        }),
+      );
+    } catch (error) {
+      /* Private mode or a full quota — the quiz still works, it just cannot resume. */
+    }
+  }
+
+  function readQuizDraft(kitId) {
+    try {
+      const raw = localStorage.getItem(QUIZ_DRAFT_KEY);
+      if (!raw) return null;
+      const draft = JSON.parse(raw);
+      if (!draft || draft.kitId !== kitId || !draft.answers) return null;
+      return draft;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function clearQuizDraft() {
+    try {
+      localStorage.removeItem(QUIZ_DRAFT_KEY);
+    } catch (error) {
+      /* ignore */
+    }
+  }
+
+  function resumeQuiz(draft) {
+    quizState = {
+      kitId: draft.kitId,
+      status: "running",
+      index: Math.max(0, Number(draft.index) || 0),
+      phase: draft.phase === "marked" ? "marked" : "answering",
+      answers: draft.answers || {},
+      results: draft.results || {},
+      startedAt: draft.startedAt || Date.now(),
+      questionStartedAt: Date.now(),
+      attempt: null,
+      items: Array.isArray(draft.items) ? draft.items : null,
+      retry: Boolean(draft.retry),
+    };
+    render();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    toast("Picked up where you left off.");
+  }
+
+  /* The timed exam is kept the same way, because losing a paper to a reload is
+     a horrible way to learn that a clock was running. */
+  const EXAM_KEY = "studyforge.exam.v1";
+
+  function saveExamDraft() {
+    if (examState.status !== "running" || !examState.kitId) return;
+    try {
+      localStorage.setItem(
+        EXAM_KEY,
+        JSON.stringify({
+          kitId: examState.kitId,
+          answers: examState.answers,
+          startedAt: examState.startedAt,
+          endsAt: examState.endsAt,
+        }),
+      );
+    } catch (error) {
+      /* storage is optional here */
+    }
+  }
+
+  function readExamDraft(kitId) {
+    try {
+      const raw = localStorage.getItem(EXAM_KEY);
+      if (!raw) return null;
+      const draft = JSON.parse(raw);
+      if (!draft || draft.kitId !== kitId) return null;
+      return draft;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function clearExamDraft() {
+    try {
+      localStorage.removeItem(EXAM_KEY);
+    } catch (error) {
+      /* ignore */
+    }
+  }
+
   /** Deck order: natural, or a stable shuffle stored in flashState.order. */
   function deckOrder(kit) {
     const total = kit.flashcards ? kit.flashcards.items.length : 0;
     if (!total) return [];
+    if (flashState.hardMode) {
+      const hardest = flashState.hardList && flashState.hardList.length ? flashState.hardList : hardestCards(kit);
+      if (hardest.length) return hardest;
+      flashState.hardMode = false;
+    }
+    if (flashState.unseenMode) {
+      const ratings = (kit.flashcards && kit.flashcards.ratings) || {};
+      const unseen = kit.flashcards.items
+        .map((card, index) => ({ card, index }))
+        .filter(({ card }) => !ratings[cardKey(card)])
+        .map(({ index }) => index);
+      if (unseen.length) return unseen;
+      flashState.unseenMode = false;
+    }
+    if (flashState.reviewMode) {
+      const now = Date.now();
+      const ratings = (kit.flashcards && kit.flashcards.ratings) || {};
+      const inMode = kit.flashcards.items
+        .map((card, index) => ({ card, index }))
+        .filter(({ card }) => {
+          const rating = ratings[cardKey(card)];
+          if (flashState.dueOnly) return !rating || new Date(rating.dueAt).getTime() <= now;
+          return rating && rating.state === "again";
+        })
+        .map(({ index }) => index);
+      if (inMode.length) return inMode;
+      flashState.reviewMode = false;
+      flashState.dueOnly = false;
+    }
     if (!flashState.order || flashState.order.length !== total) {
       flashState.order = Array.from({ length: total }, (_, index) => index);
     }
@@ -204,10 +404,12 @@
     return Math.max(0, Math.ceil((examState.endsAt - Date.now()) / 1000));
   }
 
+  /**
+   * StudyForge always has a working engine: the on-device one. This used to
+   * demand an API key; now it only exists so call sites stay readable.
+   */
   function requireKey() {
-    if (store.getApiKey()) return true;
-    openSettings("Add your NVIDIA NIM API key first — it is used for every AI step.");
-    return false;
+    return true;
   }
 
   /* ------------------------------------------------------------------ *
@@ -250,6 +452,14 @@
 
   function render() {
     parseRoute();
+    // Focus mode only makes sense while reading a guide.
+    if (document.body.classList.contains("doc-focus") && !(route.name === "kit" && route.tab === "documents")) {
+      document.body.classList.remove("doc-focus");
+    }
+    if (!(route.name === "kit" && route.tab === "flashcards")) {
+      stopMatchClock();
+      mixedReview = null;
+    }
     const snapshot = captureDrafts();
     els.view.innerHTML = "";
 
@@ -264,9 +474,18 @@
         resetDeck(route.id);
         if (examState.kitId !== route.id) resetExam(route.id);
       }
+      if (kit && pendingDueReview === kit.id && route.tab === "flashcards") {
+        pendingDueReview = null;
+        flashState.reviewMode = true;
+        flashState.dueOnly = true;
+        flashState.index = 0;
+        flashState.flipped = false;
+      }
       els.view.appendChild(
         kit ? renderKit(kit, route.tab) : renderMissing("That study kit no longer exists."),
       );
+    } else if (route.name === "activity") {
+      els.view.appendChild(renderActivity());
     } else if (route.name === "resource") {
       const resource = store.getResource(route.id);
       els.view.appendChild(resource ? renderResource(resource) : renderMissing("That resource no longer exists."));
@@ -275,8 +494,160 @@
     }
 
     restoreDrafts(snapshot);
+    enhanceDocRecall();
+    wireDocSelection();
+    const staleSelection = document.getElementById("selection-card-btn");
+    if (staleSelection) staleSelection.remove();
+    restoreDocScroll();
     renderSidebar();
     renderStorage();
+    renderProviderBadge();
+  }
+
+  /**
+   * The guide's quick-recall answers start hidden, so the section can be used
+   * as a self-test instead of a list you read past.
+   */
+  function enhanceDocRecall() {
+    const body = els.view.querySelector("[data-doc-body]");
+    if (!body) return;
+    body.querySelectorAll("li > ul").forEach((answers) => {
+      if (!/^Answer:/i.test(answers.textContent.trim())) return;
+      if (answers.dataset.recallReady) return;
+      answers.dataset.recallReady = "1";
+      answers.classList.add("doc-answer");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "reveal-answer";
+      button.textContent = "Show answer";
+      button.addEventListener("click", () => {
+        const shown = answers.classList.toggle("shown");
+        button.textContent = shown ? "Hide answer" : "Show answer";
+      });
+      answers.insertAdjacentElement("afterend", button);
+    });
+  }
+
+  /**
+   * Select a sentence in a guide and turn it into a flashcard. This is how most
+   * people actually study a document: they find the sentence that matters.
+   */
+  function wireDocSelection() {
+    const body = els.view.querySelector("[data-doc-body]");
+    if (!body) return;
+    body.addEventListener("mouseup", () => showSelectionButton(body));
+    body.addEventListener("keyup", (event) => {
+      if (event.key === "Shift" || event.key.startsWith("Arrow")) showSelectionButton(body);
+    });
+  }
+
+  function showSelectionButton(body) {
+    const selection = typeof window.getSelection === "function" ? window.getSelection() : null;
+    const text = selection ? String(selection.toString() || "").trim() : "";
+    const existing = document.getElementById("selection-card-btn");
+    if (!text || text.length < 12 || text.length > 400) {
+      if (existing) existing.remove();
+      return;
+    }
+    let rect = null;
+    try {
+      const range = selection.getRangeAt(0).getBoundingClientRect();
+      if (range && (range.width || range.height)) rect = range;
+    } catch (error) {
+      rect = null;
+    }
+    const button = existing || document.createElement("button");
+    button.id = "selection-card-btn";
+    button.type = "button";
+    button.className = "selection-card-btn";
+    button.textContent = "Make a flashcard";
+    button.onclick = () => {
+      openSelectionCard(body.dataset.kitId, text);
+      button.remove();
+      if (selection && typeof selection.removeAllRanges === "function") selection.removeAllRanges();
+    };
+    if (!existing) document.body.appendChild(button);
+    if (rect) {
+      const top = Math.max(12, rect.top - 44) + (window.scrollY || 0);
+      button.style.top = `${top}px`;
+      button.style.left = `${Math.max(12, rect.left + rect.width / 2 - 70) + (window.scrollX || 0)}px`;
+    }
+  }
+
+  /**
+   * Editing a guide makes the cards and questions out of date. Offer a rebuild
+   * rather than silently leaving them stale.
+   */
+  function offerRegenerate(kitId) {
+    const kit = store.getKit(kitId);
+    if (!kit || (!kit.quiz && !kit.flashcards)) return;
+    openModal({
+      title: "Rebuild the study material?",
+      confirmLabel: "Rebuild now",
+      cancelLabel: "Not now",
+      body: `<p>You changed the guide. The flashcards${kit.quiz ? " and quiz questions" : ""} in
+        <strong>${esc(kit.name)}</strong> were written from the old version.</p>
+        <p class="muted small">Rebuilding keeps your review history for cards whose prompt has not changed.</p>`,
+      onConfirm: () => {
+        const fresh = store.getKit(kitId);
+        if (!fresh) return;
+        jobs.makeFlashcards(fresh, Math.max(10, (fresh.flashcards && fresh.flashcards.items.length) || 20), store.getSettings().flashcardStyle || "vocab");
+        if (fresh.quiz) jobs.makeQuiz(fresh, Math.max(5, fresh.quiz.items.length || 10), "");
+        toast("Rebuilding from the updated guide…");
+      },
+    });
+  }
+
+  function openSelectionCard(kitId, text) {
+    const kit = kitId ? store.getKit(kitId) : null;
+    if (!kit) return;
+    openModal({
+      title: "Make a flashcard",
+      confirmLabel: "Add card",
+      body: `
+        <div class="field">
+          <label for="sel-front">Prompt</label>
+          <input id="sel-front" type="text" placeholder="What is the question this answers?">
+        </div>
+        <div class="field">
+          <label for="sel-back">Answer</label>
+          <textarea id="sel-back" rows="4">${esc(text)}</textarea>
+          <span class="hint">Taken from your study guide — edit it however you like.</span>
+        </div>`,
+      onConfirm: (root) => {
+        const front = root.querySelector("#sel-front").value.trim();
+        const back = root.querySelector("#sel-back").value.trim();
+        if (!front || !back) {
+          toast("A card needs both a prompt and an answer.", "error");
+          return false;
+        }
+        const current = kit.flashcards || { items: [] };
+        if (current.items && current.items.some((card) => card.front.toLowerCase() === front.toLowerCase())) {
+          toast("That prompt is already in the deck.", "error");
+          return false;
+        }
+        store.setKitFlashcards(kit.id, {
+          ...current,
+          items: [...(current.items || []), { front, back, source: "From the study guide" }],
+        });
+        toast("Card added to the deck.", "success");
+      },
+    });
+  }
+
+  /** Guides remember the reader's place per document. */
+  function restoreDocScroll() {
+    if (route.name !== "kit" || route.tab !== "documents") return;
+    const panel = els.view.querySelector("[data-doc-body]");
+    if (!panel) return;
+    const key = `${route.id}:${docViewId || "first"}`;
+    const saved = docScroll[key];
+    if (!saved || saved < 40) return;
+    try {
+      window.scrollTo(0, saved);
+    } catch (error) {
+      /* fine in tests */
+    }
   }
 
   function renderMissing(message) {
@@ -432,7 +803,18 @@
         </button>
       </div>
       <div class="nav-group">
+        <div class="nav-label">Progress</div>
+        <button class="nav-item ${route.name === "activity" ? "active" : ""}" data-action="open-activity" title="Your activity">
+          <span class="nav-icon">${icon("chart")}</span>
+          <span class="nav-text">Activity</span>
+        </button>
+      </div>
+      <div class="nav-group">
         <div class="nav-label">Data</div>
+        <button class="nav-item" data-action="show-shortcuts" title="Keyboard shortcuts">
+          <span class="nav-icon">${icon("keyboard")}</span>
+          <span class="nav-text">Shortcuts</span>
+        </button>
         <button class="nav-item" data-action="export-backup" title="Export a backup">
           <span class="nav-icon">${icon("download")}</span>
           <span class="nav-text">Export backup</span>
@@ -449,6 +831,38 @@
     }
   }
 
+  /**
+   * Topbar chip: which engine will write the next study guide.
+   * Local is a first-class state here, not an error.
+   */
+  function renderProviderBadge() {
+    const slot = $("provider-slot");
+    if (!slot) return;
+    const info = StudyForge.ai.providerInfo();
+    const enabled = StudyForge.ai.isAiEnabled();
+    const local = info.kind === "local";
+    const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+    const label = offline
+      ? "Offline — still works"
+      : local
+        ? "On-device engine"
+        : enabled
+          ? info.label
+          : `${info.label} — key needed`;
+    slot.innerHTML = `
+      <button class="engine-chip ${offline ? "offline" : local ? "local" : enabled ? "ai" : "offline"} ${offline ? "is-offline" : ""}" data-action="open-settings"
+        title="${esc(
+          offline
+            ? "No connection: guides, cards, quizzes and marking all run in this browser"
+            : local
+              ? "Generation runs in this browser — no key needed"
+              : `${info.label} is connected`,
+        )}">
+        <span class="engine-dot"></span>
+        <span class="engine-label">${esc(label)}</span>
+      </button>`;
+  }
+
   function renderStorage() {
     const bytes = store.storageBytes();
     const limit = 5 * 1024 * 1024;
@@ -458,6 +872,72 @@
       <div class="storage-row"><span>Local storage</span><strong>${(bytes / 1024).toFixed(0)} KB</strong></div>
       <div class="meter"><span style="width:${percent}%"></span></div>
       ${error ? '<p class="tiny danger">Storage is full — export a backup and delete old resources.</p>' : ""}`;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Sample kit
+   * ------------------------------------------------------------------ */
+
+  const DEMO_TEXT = `Photosynthesis is the process by which green plants convert light energy into chemical energy stored in glucose.
+
+Chlorophyll: the green pigment inside chloroplasts that absorbs light energy.
+
+- Mitochondria — the organelles where aerobic respiration releases energy from glucose.
+- Osmosis — the movement of water across a semi-permeable membrane from a low solute concentration to a high one.
+
+Carbon dioxide and water are the raw materials of photosynthesis, and oxygen is released as a by-product. The light-dependent reactions happen in the thylakoid membranes, while the Calvin cycle fixes carbon in the stroma.
+
+Cellular respiration is the process that releases energy from glucose in the mitochondria. Respiration produces ATP, which powers most cellular work, and it happens in three stages: glycolysis, the Krebs cycle and the electron transport chain.
+
+Enzymes are proteins that speed up chemical reactions by lowering activation energy. Enzyme activity is affected by temperature and pH, and each enzyme has an optimum where its rate is highest.
+
+Diffusion is the net movement of particles from a region of high concentration to a region of low concentration. Osmosis is a special case of diffusion that only involves water.
+
+Active transport is the movement of substances against a concentration gradient, and it requires energy in the form of ATP.`;
+
+  /** One-click starter kit so the first run is never an empty page. */
+  function createDemoKit() {
+    if (!StudyForge.local.hasUsableText(DEMO_TEXT)) return null;
+    let cls = store.get().classes.find((item) => item.name === "Biology");
+    if (!cls) cls = store.addClass("Biology");
+    const kit = store.addKit({ name: "Cells & Transport", classId: cls.id, subject: "Sample kit" });
+    const resource = store.addResource({ kitId: kit.id, name: "Sample notes", type: "text" });
+    store.setResourceDocument(resource.id, StudyForge.local.buildStudyDocument({
+      name: "Cells & Transport",
+      subject: "Sample kit",
+      text: DEMO_TEXT,
+    }));
+    store.updateResource(resource.id, { status: "ready", statusMessage: "Sample notes ready." });
+    // Build the set straight from the document — instant, no job queue noise.
+    try {
+      const questions = StudyForge.local.buildQuestions({ text: DEMO_TEXT, count: 8 });
+      store.setKitQuiz(kit.id, {
+        generatedAt: new Date().toISOString(),
+        items: questions,
+        sourceCount: 1,
+        sourceNames: ["Sample notes"],
+        coverage: [{ id: resource.id, name: "Sample notes", requested: 8, produced: questions.length }],
+        failures: [],
+        engine: "local",
+      });
+      const cards = StudyForge.local.buildFlashcards({ text: DEMO_TEXT, count: 12, style: "vocab" }).map((card) => ({
+        ...card,
+        source: "Sample notes",
+      }));
+      store.setKitFlashcards(kit.id, {
+        generatedAt: new Date().toISOString(),
+        items: cards,
+        style: "vocab",
+        engine: "local",
+        sourceCount: 1,
+        sourceNames: ["Sample notes"],
+        coverage: [{ id: resource.id, name: "Sample notes", requested: 12, produced: cards.length }],
+        failures: [],
+      });
+    } catch (error) {
+      console.warn("[StudyForge] Sample kit partially built:", error);
+    }
+    return { kit, cls };
   }
 
   /* ------------------------------ dashboard ------------------------ */
@@ -472,8 +952,18 @@
       const needle = query.toLowerCase();
       if (kit.name.toLowerCase().includes(needle)) return true;
       if (kit.subject.toLowerCase().includes(needle)) return true;
+      // Also match card prompts/answers and quiz questions, so search finds the
+      // topic rather than only the kit that happens to hold it.
+      const cards = (kit.flashcards && kit.flashcards.items) || [];
+      if (cards.some((card) => `${card.front} ${card.back}`.toLowerCase().includes(needle))) return true;
+      const questions = (kit.quiz && kit.quiz.items) || [];
+      if (questions.some((item) => String(item.question || "").toLowerCase().includes(needle))) return true;
       return state.resources.some(
-        (resource) => resource.kitId === kit.id && resource.name.toLowerCase().includes(needle),
+        (resource) =>
+          resource.kitId === kit.id &&
+          (resource.name.toLowerCase().includes(needle) ||
+            // Search inside generated guides too, not just titles.
+            (resource.document && resource.document.toLowerCase().includes(needle))),
       );
     };
 
@@ -488,6 +978,11 @@
     );
     const attempts = state.kits.reduce(
       (total, kit) => total + (kit.quiz && kit.quiz.attempts ? kit.quiz.attempts.length : 0),
+      0,
+    );
+    const secondsStudied = state.kits.reduce(
+      (total, kit) =>
+        total + ((kit.quiz && kit.quiz.attempts) || []).reduce((sum, attempt) => sum + (attempt.secondsUsed || 0), 0),
       0,
     );
     const best = state.kits.reduce((top, kit) => {
@@ -512,11 +1007,27 @@
       <p class="page-sub">Turn your PDFs and notes into study guides, flashcards, quizzes and practice tests — every attempt is saved so you can watch yourself improve.</p>
       ${state.kits.length === 0 ? renderEmptyDashboard() : ""}
       ${
+        state.kits.length && query && !visibleKits.length
+          ? `<div class="empty">
+              <h3>No matches for “${esc(query)}”</h3>
+              <p class="muted">Search looks at kit names, subjects, resource names and study-guide text.</p>
+              <button class="btn" data-action="clear-search">Clear search</button>
+            </div>`
+          : ""
+      }
+      ${renderStreakStrip(state)}
+      ${renderBackupNudge(state)}
+      ${renderDuePanel(state)}
+      ${renderWeekStrip(state)}
+      ${renderExamCountdowns(state)}
+      ${renderContinueCard(state)}
+      ${
         state.kits.length
           ? `<div class="stat-strip">
               <div class="stat"><span class="stat-value">${state.kits.length}</span><span class="stat-label">Study kits</span></div>
               <div class="stat"><span class="stat-value">${cardCount}</span><span class="stat-label">Flashcards</span></div>
               <div class="stat"><span class="stat-value">${attempts}</span><span class="stat-label">Quiz attempts</span></div>
+              <div class="stat"><span class="stat-value">${formatMinutes(secondsStudied)}</span><span class="stat-label">Time in quizzes</span></div>
               <div class="stat accent"><span class="stat-value">${attempts ? `${best}%` : "—"}</span><span class="stat-label">Best quiz score</span></div>
             </div>`
           : ""
@@ -563,6 +1074,532 @@
     return page;
   }
 
+  /** Total cards waiting for review across the library, with a one-click start. */
+  function dueAcrossKits(state) {
+    const now = Date.now();
+    let total = 0;
+    let best = null;
+    for (const kit of state.kits) {
+      const deck = kit.flashcards;
+      if (!deck || !deck.items.length) continue;
+      const ratings = deck.ratings || {};
+      let due = 0;
+      for (const card of deck.items) {
+        const rating = ratings[cardKey(card)];
+        if (!rating || new Date(rating.dueAt).getTime() <= now) due += 1;
+      }
+      if (due > 0) {
+        total += due;
+        if (!best || due > best.due) best = { kit, due };
+      }
+    }
+    return { total, best };
+  }
+
+  function renderDuePanel(state) {
+    if (!state.kits.length || query || filterClassId) return "";
+    const { total, best } = dueAcrossKits(state);
+    if (!total || !best) return "";
+    const upcoming = state.kits.reduce(
+      (sum, kit) => sum + (kit.flashcards ? (store.deckSchedule(kit.id).later || 0) : 0),
+      0,
+    );
+    return `
+      <section class="due-panel">
+        <div class="due-copy">
+          <span class="due-figure">${total}</span>
+          <div>
+            <strong>${total === 1 ? "card is" : "cards are"} due for review</strong>
+            <p class="muted tiny">Most come from ${esc(best.kit.name)}.${
+              upcoming ? ` ${upcoming} more come back within a week.` : ""
+            } A few minutes now keeps everything fresh.</p>
+          </div>
+        </div>
+        <div class="row tight">
+          <button class="btn small ghost" data-action="review-mixed">All kits together</button>
+          <button class="btn primary small" data-action="review-all-due" data-id="${esc(best.kit.id)}">Review now</button>
+        </div>
+      </section>`;
+  }
+
+  /**
+   * How the next seven days of revision look: one chip per day with the number
+   * of cards coming back, today highlighted.
+   */
+  function renderWeekStrip(state) {
+    if (!state.kits.length || query || filterClassId) return "";
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const buckets = [];
+    for (let offset = 0; offset < 7; offset += 1) {
+      const date = new Date(start.getTime() + offset * 86400000);
+      buckets.push({
+        date,
+        key: store.dayKey(date),
+        label: offset === 0 ? "Today" : date.toLocaleDateString(undefined, { weekday: "short" }),
+        count: 0,
+      });
+    }
+    for (const kit of state.kits) {
+      const deck = kit.flashcards;
+      if (!deck) continue;
+      const ratings = deck.ratings || {};
+      for (const card of deck.items) {
+        const rating = ratings[cardKey(card)];
+        if (!rating) {
+          buckets[0].count += 1;
+          continue;
+        }
+        const key = store.dayKey(new Date(rating.dueAt));
+        const bucket = buckets.find((entry) => entry.key === key);
+        if (bucket) bucket.count += 1;
+      }
+    }
+    const total = buckets.reduce((sum, bucket) => sum + bucket.count, 0);
+    if (!total) return "";
+    return `
+      <section class="week-strip" aria-label="Revision coming up this week">
+        <span class="week-label">Next 7 days</span>
+        ${buckets
+          .map(
+            (bucket, index) => `
+              <span class="week-day ${bucket.count ? "has" : ""} ${index === 0 ? "today" : ""}">
+                <span class="week-day-name">${esc(bucket.label)}</span>
+                <span class="week-day-count">${bucket.count || "—"}</span>
+              </span>`,
+          )
+          .join("")}
+      </section>`;
+  }
+
+  /** "4m" / "1h 20m" / "—" for the dashboard stats. */
+  function formatMinutes(seconds) {
+    if (!seconds) return "—";
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 1) return "<1m";
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    return rest ? `${hours}h ${rest}m` : `${hours}h`;
+  }
+
+  /** Monday-based week with the days that already have activity on them. */
+  function weekProgress(goal) {
+    const activity = store.get().activity || {};
+    const todayKey = store.dayKey();
+    const now = new Date();
+    const mondayOffset = (now.getDay() + 6) % 7; // Monday = 0
+    const days = [];
+    let done = 0;
+    for (let index = 0; index < 7; index += 1) {
+      const date = new Date(now.getTime() + (index - mondayOffset) * 86400000);
+      const key = store.dayKey(date);
+      const entry = activity[key] || {};
+      const studied = Object.values(entry).some((value) => Number(value) > 0);
+      if (studied) done += 1;
+      days.push({
+        key,
+        label: date.toLocaleDateString(undefined, { weekday: "long" }),
+        done: studied,
+        today: key === todayKey,
+        future: key > todayKey,
+      });
+    }
+    // Days still to come this week count towards the goal, past ones do not.
+    const remaining = days.filter((day) => day.future).length;
+    return { done, days, goal, remaining, onTrack: done + remaining >= goal };
+  }
+
+  /**
+   * Everything lives in this browser, so a backup is the only thing between the
+   * learner and a cleared cache. Nudge quietly after two weeks.
+   */
+  function renderBackupNudge(state) {
+    if (!state.kits.length) return "";
+    const last = state.settings && state.settings.lastBackupAt;
+    const days = last ? (Date.now() - new Date(last).getTime()) / 86400000 : Infinity;
+    if (days < 14) return "";
+    return `
+      <div class="notice subtle backup-nudge">
+        <span>${last ? "Your last backup was a while ago." : "You have not backed up this library yet."}
+          Everything is stored in this browser only.</span>
+        <button class="btn small" data-action="export-backup">Download backup</button>
+      </div>`;
+  }
+
+  /** Upcoming exam dates across the library, soonest first. */
+  function renderExamCountdowns(state) {
+    if (query) return "";
+    const upcoming = state.kits
+      .map((kit) => ({ kit, when: examCountdown(kit) }))
+      .filter((entry) => entry.when && !entry.when.past)
+      .sort((a, b) => a.when.days - b.when.days)
+      .slice(0, 3);
+    if (!upcoming.length) return "";
+    return `
+      <div class="exam-strip">
+        ${upcoming
+          .map(
+            ({ kit, when }) => `
+          <a class="exam-strip-item" href="#/kit/${esc(kit.id)}/flashcards">
+            <span class="exam-strip-days">${when.days === 0 ? "Today" : `${when.days}d`}</span>
+            <span class="exam-strip-main">
+              <strong>${esc(kit.name)}</strong>
+              <span class="muted tiny">${esc(when.label)}${
+                when.perDay ? ` · ${when.perDay} cards a day` : ""
+              }</span>
+            </span>
+          </a>`,
+          )
+          .join("")}
+      </div>`;
+  }
+
+  /** Streak + a two-week heat strip, so momentum is visible at a glance. */
+  function renderStreakStrip(state) {
+    if (!state.kits.length || query) return "";
+    const streak = store.streakInfo();
+    const days = store.activityDays(14);
+    const hasAny = days.some((day) => day.total > 0);
+    if (!streak.current && !hasAny) {
+      return `
+        <section class="streak-strip quiet">
+          <span class="streak-flame">🔥</span>
+          <div class="streak-copy">
+            <strong>Start a streak today</strong>
+            <span class="muted tiny">Rate a flashcard or finish a quiz and your streak begins.</span>
+          </div>
+        </section>`;
+    }
+    const goal = store.getSettings().weeklyGoal || 5;
+    const week = weekProgress(goal);
+    return `
+      <section class="streak-strip">
+        <span class="streak-flame">${streak.days ? "🔥" : "🌱"}</span>
+        <div class="streak-copy">
+          <strong>${streak.current} day${streak.current === 1 ? "" : "s"} in a row</strong>
+          <span class="muted tiny">${
+            streak.days
+              ? "Today counts. Keep it going."
+              : "Study today to keep the streak alive."
+          }${streak.best > streak.current ? ` · best ${streak.best}` : ""}</span>
+        </div>
+        <div class="week-goal" title="${week.done} of ${goal} days studied this week">
+          <span class="week-goal-days">${week.days
+            .map(
+              (day) =>
+                `<span class="goal-dot ${day.done ? "done" : ""} ${day.today ? "today" : ""}" title="${esc(day.label)}${
+                  day.done ? " · studied" : ""
+                }"></span>`,
+            )
+            .join("")}</span>
+          <span class="muted tiny">${week.done}/${goal} days this week</span>
+        </div>
+        <div class="heat-strip" role="img" aria-label="Study activity over the last 14 days">
+          ${days
+            .map(
+              (day) =>
+                `<span class="heat-cell level-${day.level}" title="${esc(day.date)} · ${
+                  day.total ? `${day.total} actions` : "no activity"
+                }"></span>`,
+            )
+            .join("")}
+        </div>
+      </section>`;
+  }
+
+  /** One-click way back into whatever was studied most recently. */
+  /**
+   * "Up next" — one recommendation instead of a menu. The order is deliberate:
+   * an unfinished quiz first (it is already half done), then cards that are due,
+   * then a kit with an exam close, then the kit with the weakest last attempt,
+   * and finally whatever was touched most recently.
+   */
+  function nextStep(state) {
+    let draft = null;
+    try {
+      const raw = localStorage.getItem(QUIZ_DRAFT_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const kit = state.kits.find((entry) => entry.id === parsed.kitId);
+        if (kit) draft = { kit, data: parsed };
+      }
+    } catch (error) {
+      draft = null;
+    }
+    if (draft) {
+      const total = Array.isArray(draft.data.items) && draft.data.items.length ? draft.data.items.length : 0;
+      const marked = Object.keys(draft.data.results || {}).length;
+      return {
+        kit: draft.kit,
+        title: "Finish your quiz",
+        reason: `${marked} of ${total || "the"} questions marked — pick up where you stopped.`,
+        href: `#/kit/${draft.kit.id}/questions`,
+        cta: "Resume quiz",
+      };
+    }
+
+    const due = state.kits
+      .map((kit) => ({ kit, schedule: kit.flashcards ? store.deckSchedule(kit.id) : null }))
+      .filter((entry) => entry.schedule && entry.schedule.due > 0)
+      .sort((a, b) => b.schedule.due - a.schedule.due)[0];
+    if (due) {
+      return {
+        kit: due.kit,
+        title: `${due.schedule.due} card${due.schedule.due === 1 ? "" : "s"} due for review`,
+        reason: `Spaced review keeps ${due.kit.name} fresh — this is the smallest useful session right now.`,
+        href: `#/kit/${due.kit.id}/flashcards`,
+        cta: "Revise now",
+        action: "review-all-due",
+        id: due.kit.id,
+      };
+    }
+
+    const examSoon = state.kits
+      .map((kit) => ({ kit, when: examCountdown(kit) }))
+      .filter((entry) => entry.when && !entry.when.past && entry.when.days <= 21)
+      .sort((a, b) => a.when.days - b.when.days)[0];
+    if (examSoon) {
+      return {
+        kit: examSoon.kit,
+        title: examSoon.when.label,
+        reason: `${examSoon.kit.name} — a timed paper is the closest thing to the real thing.`,
+        href: `#/kit/${examSoon.kit.id}/exam`,
+        cta: examSoon.kit.exam ? "Sit a practice test" : "Build a practice test",
+      };
+    }
+
+    const weakest = state.kits
+      .map((kit) => {
+        const attempts = (kit.quiz && kit.quiz.attempts) || [];
+        return { kit, attempt: attempts[0] };
+      })
+      .filter((entry) => entry.attempt && entry.attempt.percent < 70)
+      .sort((a, b) => a.attempt.percent - b.attempt.percent)[0];
+    if (weakest) {
+      return {
+        kit: weakest.kit,
+        title: `Lift ${weakest.kit.name} from ${weakest.attempt.percent}%`,
+        reason: "Practise just the questions you missed — that is the fastest way up.",
+        href: `#/kit/${weakest.kit.id}/questions`,
+        cta: "Open quiz",
+      };
+    }
+
+    const recent = [...state.kits].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0];
+    if (!recent) return null;
+    const hasQuiz = Boolean(recent.quiz);
+    const hasCards = Boolean(recent.flashcards);
+    const hasGuide = store.resourcesInKit(recent.id).some((resource) => resource.document);
+    if (!hasQuiz && !hasCards && !hasGuide) return null;
+    const attempt = recent.quiz && recent.quiz.attempts && recent.quiz.attempts[0];
+    return {
+      kit: recent,
+      title: recent.name,
+      reason: `Updated ${relativeTime(recent.updatedAt)}${attempt ? ` · last quiz ${attempt.percent}%` : ""}${
+        recent.subject ? ` · ${recent.subject}` : ""
+      }`,
+      href: hasQuiz
+        ? `#/kit/${recent.id}/questions`
+        : hasCards
+          ? `#/kit/${recent.id}/flashcards`
+          : `#/kit/${recent.id}/documents`,
+      cta: hasQuiz ? "Open quiz" : hasCards ? "Open deck" : "Open guide",
+      quiet: true,
+    };
+  }
+
+  function renderContinueCard(state) {
+    if (!state.kits.length || query || filterClassId) return "";
+    const step = nextStep(state);
+    if (!step || !step.kit) return "";
+    const kit = step.kit;
+    const hasQuiz = Boolean(kit.quiz);
+    const hasCards = Boolean(kit.flashcards);
+    const hasGuide = store.resourcesInKit(kit.id).some((resource) => resource.document);
+    const primary =
+      step.action && step.id
+        ? `<button class="btn small primary" data-action="${step.action}" data-id="${esc(step.id)}">${esc(step.cta)}</button>`
+        : `<a class="btn small primary" href="${step.href}">${esc(step.cta)}</a>`;
+    return `
+      <section class="continue-card ${step.quiet ? "quiet" : ""}">
+        <div class="continue-main">
+          <span class="pill accent">${step.quiet ? "Pick up where you left off" : "Up next"}</span>
+          <h3>${esc(step.title)}</h3>
+          <p class="muted tiny">${esc(step.reason)}</p>
+        </div>
+        <div class="row tight">
+          ${primary}
+          ${hasGuide ? `<a class="btn small ghost" href="#/kit/${esc(kit.id)}/documents">Study guide</a>` : ""}
+          ${hasCards && !step.quiet ? `<a class="btn small ghost" href="#/kit/${esc(kit.id)}/flashcards">Flashcards</a>` : ""}
+          ${hasQuiz && !step.quiet ? `<a class="btn small ghost" href="#/kit/${esc(kit.id)}/questions">Quiz</a>` : ""}
+        </div>
+      </section>`;
+  }
+
+  /**
+   * Activity: a month calendar, month totals and every quiz attempt across the
+   * library in one place.
+   */
+  function renderActivity() {
+    const state = store.get();
+    const page = document.createElement("div");
+    page.className = "page";
+    const streak = store.streakInfo();
+    const activity = state.activity || {};
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const first = new Date(year, month, 1);
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const lead = (first.getDay() + 6) % 7; // Monday-first grid
+    const cells = [];
+    for (let index = 0; index < lead; index += 1) cells.push(null);
+    let studiedDays = 0;
+    let monthCards = 0;
+    for (let day = 1; day <= daysInMonth; day += 1) {
+      const date = new Date(year, month, day);
+      const key = store.dayKey(date);
+      const entry = activity[key] || {};
+      const cards = Number(entry.cards) || 0;
+      const quizzes = Number(entry.quizzes) || 0;
+      const guides = Number(entry.guides) || 0;
+      const total = cards + quizzes + guides;
+      if (total > 0) studiedDays += 1;
+      monthCards += cards;
+      cells.push({
+        day,
+        key,
+        total,
+        cards,
+        quizzes,
+        future: key > store.dayKey(now),
+        today: key === store.dayKey(now),
+      });
+    }
+
+    const attempts = [];
+    state.kits.forEach((kit) => {
+      ((kit.quiz && kit.quiz.attempts) || []).forEach((attempt) => {
+        attempts.push({ kit, attempt });
+      });
+    });
+    attempts.sort((a, b) => String(b.attempt.takenAt).localeCompare(String(a.attempt.takenAt)));
+    const monthAttempts = attempts.filter((entry) => {
+      const date = new Date(entry.attempt.takenAt);
+      return date.getFullYear() === year && date.getMonth() === month;
+    });
+    const average = monthAttempts.length
+      ? Math.round(monthAttempts.reduce((sum, entry) => sum + entry.attempt.percent, 0) / monthAttempts.length)
+      : 0;
+    const bestMonth = monthAttempts.reduce((best, entry) => Math.max(best, entry.attempt.percent), 0);
+    const seconds = monthAttempts.reduce((sum, entry) => sum + (entry.attempt.secondsUsed || 0), 0);
+
+    page.innerHTML = `
+      <header class="page-head">
+        <div class="page-title">
+          <p class="eyebrow">Progress</p>
+          <h1>Your activity</h1>
+        </div>
+        <div class="row tight">
+          ${attempts.length ? `<button class="btn" data-action="download-attempts">Export attempts</button>` : ""}
+          <a class="btn primary" href="#/">Back to study kits</a>
+        </div>
+      </header>
+      <p class="page-sub">Everything here is counted from what you actually did in this browser — cards rated,
+        guides built and quizzes taken.</p>
+      <div class="stat-strip">
+        <div class="stat"><span class="stat-value">${streak.days}</span><span class="stat-label">Day streak</span></div>
+        <div class="stat"><span class="stat-value">${studiedDays}</span><span class="stat-label">Study days this month</span></div>
+        <div class="stat"><span class="stat-value">${monthCards}</span><span class="stat-label">Cards rated this month</span></div>
+        <div class="stat"><span class="stat-value">${monthAttempts.length}</span><span class="stat-label">Quizzes this month</span></div>
+        <div class="stat accent"><span class="stat-value">${monthAttempts.length ? `${average}%` : "—"}</span><span class="stat-label">Average score</span></div>
+      </div>
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>${esc(now.toLocaleDateString(undefined, { month: "long", year: "numeric" }))}</h2>
+            <p class="muted tiny">${bestMonth ? `Best score this month ${bestMonth}% · ${formatMinutes(seconds)} of quizzes.` : "No quizzes this month yet."}</p>
+          </div>
+        </div>
+        <div class="month-grid" role="img" aria-label="Study calendar for this month">
+          ${["M", "T", "W", "T", "F", "S", "S"]
+            .map((label) => `<span class="month-head">${label}</span>`)
+            .join("")}
+          ${cells
+            .map((cell) => {
+              if (!cell) return `<span class="month-cell blank"></span>`;
+              const level = cell.total === 0 ? "" : cell.total < 3 ? "low" : cell.total < 8 ? "mid" : "high";
+              const label = `${new Date(cell.key).toLocaleDateString(undefined, {
+                day: "numeric",
+                month: "short",
+              })}${cell.total ? ` — ${plural(cell.total, "study action")}` : " — nothing yet"}`;
+              return `<span class="month-cell ${level} ${cell.today ? "today" : ""} ${cell.future ? "future" : ""}"
+                title="${esc(label)}" aria-label="${esc(label)}">${cell.day}</span>`;
+            })
+            .join("")}
+        </div>
+      </section>
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Quiz attempts</h2>
+            <p class="muted tiny">${attempts.length ? `Every attempt, newest first.` : "No attempts yet — take a quiz and it will appear here."}</p>
+          </div>
+        </div>
+        ${
+          attempts.length
+            ? `<ol class="attempt-list">${attempts
+                .slice(0, 40)
+                .map(
+                  ({ kit, attempt }) => `
+                <li class="attempt-row">
+                  <span class="attempt-score ${attempt.percent >= 70 ? "good" : attempt.percent >= 50 ? "mid" : "low"}">${attempt.percent}%</span>
+                  <span class="attempt-main">
+                    <strong>${esc(kit.name)}</strong>
+                    <span class="muted tiny">${esc(new Date(attempt.takenAt).toLocaleString())}${
+                      attempt.secondsUsed ? ` · ${formatClock(attempt.secondsUsed)}` : ""
+                    }</span>
+                  </span>
+                  <span class="attempt-bar"><span style="width:${attempt.percent}%"></span></span>
+                  <button class="btn ghost small" data-action="review-attempt" data-id="${esc(attempt.id)}"
+                    data-kit="${esc(kit.id)}">Review</button>
+                  <a class="btn ghost small" href="#/kit/${esc(kit.id)}/questions">Open kit</a>
+                </li>`,
+                )
+                .join("")}</ol>`
+            : ""
+        }
+      </section>`;
+    return page;
+  }
+
+  /** Every attempt in the library as CSV, for a spreadsheet or a tutor. */
+  function attemptsToCsv(state) {
+    const cell = (value) => `"${String(value == null ? "" : value).replace(/"/g, '""')}"`;
+    const rows = [["Date", "Kit", "Score", "Correct", "Total", "Percent", "Seconds"].map(cell).join(",")];
+    const entries = [];
+    state.kits.forEach((kit) => {
+      ((kit.quiz && kit.quiz.attempts) || []).forEach((attempt) => entries.push({ kit, attempt }));
+    });
+    entries
+      .sort((a, b) => String(a.attempt.takenAt).localeCompare(String(b.attempt.takenAt)))
+      .forEach(({ kit, attempt }) => {
+        rows.push(
+          [
+            cell(new Date(attempt.takenAt).toISOString().slice(0, 16).replace("T", " ")),
+            cell(kit.name),
+            cell(attempt.percent),
+            cell(attempt.correct),
+            cell(attempt.total),
+            cell(attempt.percent),
+            cell(attempt.secondsUsed || 0),
+          ].join(","),
+        );
+      });
+    return `\uFEFF${rows.join("\r\n")}\r\n`;
+  }
+
   function renderEmptyDashboard() {
     return `
       <div class="empty hero">
@@ -571,7 +1608,9 @@
         <div class="row center">
           <button class="btn primary" data-action="new-kit">New study kit</button>
           <button class="btn" data-action="new-class">New class</button>
+          <button class="btn" data-action="load-demo">Try a sample kit</button>
         </div>
+        <p class="tiny muted">The sample kit builds a guide, a flashcard deck and an 8-question quiz on the spot — no key, no setup.</p>
       </div>`;
   }
 
@@ -630,6 +1669,7 @@
         id: "flashcards",
         label: "Flashcards",
         count: kit.flashcards ? kit.flashcards.items.length : 0,
+        due: kit.flashcards ? store.deckSchedule(kit.id).due : 0,
         href: `#/kit/${kit.id}/flashcards`,
       },
       {
@@ -643,7 +1683,9 @@
       .map(
         (tab) => `<a role="tab" aria-selected="${tab.id === activeTab}" class="tab ${
           tab.id === activeTab ? "active" : ""
-        }" href="${tab.href}">${esc(tab.label)}<span class="count">${tab.count}</span></a>`,
+        }" href="${tab.href}">${esc(tab.label)}<span class="count">${tab.count}</span>${
+          tab.due ? `<span class="tab-due" title="${tab.due} card(s) to revise">${tab.due}</span>` : ""
+        }</a>`,
       )
       .join("")}</nav>`;
   }
@@ -660,13 +1702,18 @@
         <div class="page-title">
           <p class="eyebrow">${esc(kit.subject || "Study kit")}</p>
           <h1>${esc(kit.name)}</h1>
+          <button class="exam-chip ${examCountdown(kit) ? "set" : ""}" data-action="set-exam-date" data-id="${esc(kit.id)}">
+            ${examCountdown(kit) ? esc(examCountdown(kit).label) : "Set an exam date"}
+          </button>
         </div>
         <div class="row tight">
+          <button class="btn primary" data-action="study-now" data-id="${esc(kit.id)}">Study now</button>
           <button class="btn" data-action="edit-kit" data-id="${esc(kit.id)}">Edit details</button>
           <button class="btn" data-action="delete-kit" data-id="${esc(kit.id)}">Delete kit</button>
         </div>
       </header>
       ${kitTabs(kit, resources, tab)}
+      ${renderKitNotes(kit)}
       ${
         tab === "documents"
           ? renderKitDocuments(kit, resources)
@@ -679,6 +1726,26 @@
                 : renderKitResources(kit, resources)
       }`;
     return page;
+  }
+
+  /** A scratch pad that belongs to the kit, not to any one resource. */
+  function renderKitNotes(kit) {
+    const notes = kit.notes || "";
+    const words = notes.trim() ? notes.trim().split(/\s+/).length : 0;
+    return `
+      <details class="kit-notes" ${notes ? "open" : ""}>
+        <summary>
+          My notes
+          <span class="count" data-notes-count>${words ? `${plural(words, "word")}` : "empty"}</span>
+        </summary>
+        <textarea data-kit-notes data-id="${esc(kit.id)}" rows="6"
+          placeholder="What did your teacher stress? What keeps slipping? Anything you want next to this kit."
+        >${esc(notes)}</textarea>
+        <div class="row tight">
+          <button class="btn small" data-action="save-notes" data-id="${esc(kit.id)}">Save notes</button>
+          <span class="muted tiny" data-notes-status>${notes ? "Saved in this browser." : "Saved automatically when you leave the box."}</span>
+        </div>
+      </details>`;
   }
 
   function renderKitResources(kit, resources) {
@@ -707,7 +1774,7 @@
           <div class="row">
             <button class="btn" data-action="add-text">Add pasted text</button>
           </div>
-          <p class="muted tiny">AI settings: ${esc(settings.model)} · ${esc(settings.ocrLanguage)} OCR · ${settings.ocrScale}× render. ${store.getApiKey() ? "NIM key saved." : '<span class="danger">No NIM key yet.</span>'}</p>
+          <p class="muted tiny">Generating with ${esc(StudyForge.ai.providerLabel())}. ${esc(settings.ocrLanguage)} OCR · ${settings.ocrScale}× render. <button class="link-btn" data-action="open-settings">Change engine</button></p>
         </section>
 
         <section class="panel">
@@ -738,6 +1805,10 @@
     }
 
     const selected = withDocs.find((resource) => resource.id === docViewId) || withDocs[0];
+    const headings = (selected.document.match(/^#{1,3}\s+(.+)$/gm) || [])
+      .map((line) => line.replace(/^#+\s+/, "").trim())
+      .filter(Boolean)
+      .slice(0, 14);
     return `
       <div class="doc-layout">
         <section class="panel doc-side">
@@ -760,13 +1831,42 @@
         <section class="panel">
           <div class="panel-head">
             <h2>${esc(selected.name)}</h2>
+            <div class="doc-head-actions">
             <div class="row tight">
               <a class="btn small" href="#/resource/${esc(selected.id)}">Open resource</a>
+              <button class="btn small" data-action="listen-doc" data-id="${esc(selected.id)}">${
+                speechState.speaking && speechState.resourceId === selected.id ? "Stop reading" : "Listen"
+              }</button>
+              <button class="btn small" data-action="print-doc" data-id="${esc(selected.id)}">Print</button>
               <button class="btn small" data-action="copy-doc" data-id="${esc(selected.id)}">Copy</button>
               <button class="btn small" data-action="download-doc" data-id="${esc(selected.id)}">Download .md</button>
             </div>
+            <div class="row tight doc-read-controls">
+              <span class="doc-find-wrap">
+                <input type="search" data-doc-find placeholder="Find in guide…" aria-label="Find in the study guide" autocomplete="off" spellcheck="false">
+                <span class="doc-find-count" data-doc-find-count></span>
+              </span>
+              <span class="muted tiny">Text</span>
+              <button class="icon-btn small" data-action="doc-smaller" title="Smaller text" aria-label="Smaller text">A−</button>
+              <button class="icon-btn small" data-action="doc-bigger" title="Bigger text" aria-label="Bigger text">A+</button>
+              <button class="btn small ghost" data-action="doc-focus" title="Hide everything but the guide">Focus</button>
+            </div>
+            </div>
           </div>
-          <article class="md">${md.render(selected.document)}</article>
+          ${
+            headings.length > 1
+              ? `<nav class="doc-toc" aria-label="On this page">
+                  <span class="doc-toc-label">On this page</span>
+                  ${headings
+                    .map(
+                      (heading, index) =>
+                        `<a href="#doc-${index}" data-action="toc-jump" data-index="${index}">${esc(heading)}</a>`,
+                    )
+                    .join("")}
+                </nav>`
+              : ""
+          }
+          <article class="md" data-doc-body data-kit-id="${esc(kit.id)}" style="font-size:${readDocSize()}rem">${md.render(selected.document)}</article>
         </section>
       </div>`;
   }
@@ -818,7 +1918,8 @@
             }</button>
             ${
               quiz
-                ? `<button class="btn small" data-action="download-quiz" data-id="${esc(kit.id)}">Download .md</button>`
+                ? `<button class="btn small" data-action="print-quiz" data-id="${esc(kit.id)}">Print</button>
+                 <button class="btn small" data-action="download-quiz" data-id="${esc(kit.id)}">Download .md</button>`
                 : ""
             }
           </div>
@@ -851,7 +1952,154 @@
             : ""
         }
         ${quiz && quiz.truncated ? `<div class="notice subtle">The combined documents were long, so a proportional slice of each resource was used.</div>` : ""}
+        ${renderQuizInsights(kit)}
         ${renderKitQuiz(kit)}
+      </section>`;
+  }
+
+  /* ------------------------- progress analytics --------------------- */
+
+  /**
+   * Everything the saved attempts can tell us: score trend, accuracy by
+   * question type, pace, and the questions that keep catching you out.
+   */
+  function quizAnalytics(kit) {
+    const attempts = (kit.quiz && kit.quiz.attempts) || [];
+    if (!attempts.length) return null;
+    const oldestFirst = attempts.slice().reverse();
+    const percents = oldestFirst.map((attempt) => attempt.percent);
+    const latest = percents[percents.length - 1];
+    const previous = percents.length > 1 ? percents[percents.length - 2] : null;
+    return {
+      count: attempts.length,
+      percents,
+      latest,
+      previous,
+      delta: previous === null ? null : latest - previous,
+      best: Math.max(...percents),
+      average: Math.round(percents.reduce((sum, value) => sum + value, 0) / percents.length),
+      byType: attempts.reduce(
+        (acc, attempt) => {
+          for (const answer of attempt.answers) {
+            const type = answer.type === "short" ? "short" : "mcq";
+            acc[type].total += 1;
+            if (answer.correct) acc[type].correct += 1;
+          }
+          return acc;
+        },
+        { mcq: { correct: 0, total: 0 }, short: { correct: 0, total: 0 } },
+      ),
+      pace: (() => {
+        const timed = attempts.flatMap((attempt) => attempt.answers.filter((answer) => answer.seconds > 0));
+        if (!timed.length) return null;
+        return Math.round(timed.reduce((sum, answer) => sum + answer.seconds, 0) / timed.length);
+      })(),
+      trouble: (() => {
+        const seen = new Map();
+        for (const attempt of attempts) {
+          for (const answer of attempt.answers) {
+            const key = String(answer.question || "").toLowerCase().trim();
+            if (!key) continue;
+            const entry = seen.get(key) || { question: answer.question, correct: 0, total: 0, seconds: 0, timed: 0 };
+            entry.total += 1;
+            if (answer.correct) entry.correct += 1;
+            if (answer.seconds) {
+              entry.seconds += answer.seconds;
+              entry.timed += 1;
+            }
+            seen.set(key, entry);
+          }
+        }
+        return [...seen.values()]
+          .filter((entry) => entry.correct < entry.total)
+          .sort((a, b) => a.correct / a.total - b.correct / b.total || b.total - a.total)
+          .slice(0, 5);
+      })(),
+    };
+  }
+
+  /** Tiny SVG line chart of recent scores, newest on the right. */
+  function scoreSparkline(percents) {
+    if (percents.length < 2) return "";
+    const width = 220;
+    const height = 46;
+    const step = width / (percents.length - 1);
+    const points = percents.map((value, index) => [index * step, height - (value / 100) * (height - 6) - 3]);
+    const line = points.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+    const area = `0,${height} ${line} ${width},${height}`;
+    return `
+      <svg class="spark" viewBox="0 0 ${width} ${height}" role="img" aria-label="Score trend over ${percents.length} attempts" preserveAspectRatio="none">
+        <polygon points="${area}" class="spark-area"></polygon>
+        <polyline points="${line}" class="spark-line"></polyline>
+        ${points
+          .map(
+            ([x, y], index) =>
+              `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${index === points.length - 1 ? 3 : 2}" class="spark-dot"></circle>`,
+          )
+          .join("")}
+      </svg>`;
+  }
+
+  function renderQuizInsights(kit) {
+    const stats = quizAnalytics(kit);
+    if (!stats) return "";
+    const typeRow = (label, data) => {
+      if (!data.total) return "";
+      const percent = Math.round((data.correct / data.total) * 100);
+      return `
+        <div class="insight-row">
+          <span>${esc(label)}</span>
+          <span class="insight-bar"><span style="width:${percent}%"></span></span>
+          <span class="muted tiny">${percent}% · ${data.correct}/${data.total}</span>
+        </div>`;
+    };
+    return `
+      <section class="panel insights">
+        <div class="panel-head">
+          <div>
+            <h2>Your progress</h2>
+            <p class="muted tiny">Built from every saved attempt in this kit.</p>
+          </div>
+          <button class="btn small ghost" data-action="download-results">Download results</button>
+          ${
+            stats.delta === null
+              ? ""
+              : `<span class="pill ${stats.delta >= 0 ? "good" : "bad"}">${stats.delta >= 0 ? "▲" : "▼"} ${Math.abs(
+                  stats.delta,
+                )} pts vs last</span>`
+          }
+        </div>
+        <div class="insight-grid">
+          <div class="insight-stat"><span class="insight-figure">${stats.best}%</span><span class="muted tiny">Best</span></div>
+          <div class="insight-stat"><span class="insight-figure">${stats.average}%</span><span class="muted tiny">Average</span></div>
+          <div class="insight-stat"><span class="insight-figure">${stats.count}</span><span class="muted tiny">Attempt${stats.count === 1 ? "" : "s"}</span></div>
+          <div class="insight-stat"><span class="insight-figure">${stats.pace ? `${stats.pace}s` : "—"}</span><span class="muted tiny">Per question</span></div>
+        </div>
+        ${scoreSparkline(stats.percents)}
+        <div class="insight-breakdown">
+          ${typeRow("Multiple choice", stats.byType.mcq)}
+          ${typeRow("Short answer", stats.byType.short)}
+        </div>
+        ${
+          stats.trouble.length
+            ? `<div class="trouble">
+                <h3>Trouble spots</h3>
+                <p class="muted tiny">Asked more than once and not yet mastered.</p>
+                <ul class="trouble-list">
+                  ${stats.trouble
+                    .map(
+                      (entry) => `
+                        <li>
+                          <span class="trouble-q">${esc(entry.question)}</span>
+                          <span class="trouble-score">${entry.correct}/${entry.total}</span>
+                        </li>`,
+                    )
+                    .join("")}
+                </ul>
+                <button class="btn small" data-action="practise-weak">Practise trouble spots</button>
+              </div>`
+            : ""
+        }
       </section>`;
   }
 
@@ -869,6 +2117,58 @@
   }
 
   /** Every saved run for this kit, newest first. */
+  // Past-attempt listing: sortable columns, then the rows.
+  let attemptSort = { key: "date", direction: "desc" };
+
+  function sortedAttempts(attempts) {
+    const value = (attempt) => {
+      if (attemptSort.key === "score") return attempt.percent;
+      if (attemptSort.key === "time") return attempt.secondsUsed || 0;
+      return new Date(attempt.takenAt).getTime();
+    };
+    const direction = attemptSort.direction === "asc" ? 1 : -1;
+    return attempts.slice().sort((a, b) => (value(a) - value(b)) * direction);
+  }
+
+  function attemptTable(attempts) {
+    const arrow = (key) =>
+      attemptSort.key === key ? `<span class="sort-arrow">${attemptSort.direction === "asc" ? "▲" : "▼"}</span>` : "";
+    const header = (key, label) =>
+      `<button class="sort-head ${attemptSort.key === key ? "active" : ""}" data-action="sort-attempts" data-key="${key}">${label}${arrow(
+        key,
+      )}</button>`;
+    return `
+      <div class="attempt-grid-head">
+        <span>${header("score", "Score")}</span>
+        <span>Correct</span>
+        <span>${header("date", "When")}</span>
+        <span>${header("time", "Pace")}</span>
+        <span>Graph</span>
+        <span></span>
+      </div>
+      <ol class="attempt-list">${sortedAttempts(attempts)
+        .map(
+          (attempt) => `
+            <li class="attempt-row">
+              <span class="attempt-score ${attempt.percent >= 70 ? "good" : attempt.percent >= 50 ? "mid" : "low"}">${attempt.percent}%</span>
+              <span class="attempt-main">
+                <strong>${attempt.correct}/${attempt.total}</strong>
+                <span class="muted tiny">${
+                  attempt.total ? `${Math.round((attempt.secondsUsed || 0) / attempt.total)}s per question` : ""
+                }</span>
+              </span>
+              <span class="muted tiny attempt-when">${esc(new Date(attempt.takenAt).toLocaleString())}${
+                attempt.secondsUsed ? ` · ${formatClock(attempt.secondsUsed)}` : ""
+              }</span>
+              <span class="attempt-bar"><span style="width:${attempt.percent}%"></span></span>
+              <button class="btn ghost small" data-action="review-attempt" data-id="${esc(attempt.id)}">Review</button>
+              <button class="icon-btn danger" title="Delete this attempt" data-action="delete-quiz-attempt"
+                data-id="${esc(attempt.id)}">×</button>
+            </li>`,
+        )
+        .join("")}</ol>`;
+  }
+
   function renderAttempts(kit) {
     const attempts = (kit.quiz && kit.quiz.attempts) || [];
     const best = attempts.reduce(
@@ -887,23 +2187,7 @@
         </div>
         ${
           attempts.length
-            ? `<ol class="attempt-list">${attempts
-                .map(
-                  (attempt) => `
-                    <li class="attempt-row">
-                      <span class="attempt-score ${attempt.percent >= 70 ? "good" : attempt.percent >= 50 ? "mid" : "low"}">${attempt.percent}%</span>
-                      <span class="attempt-main">
-                        <strong>${attempt.correct}/${attempt.total} correct</strong>
-                        <span class="muted tiny">${esc(new Date(attempt.takenAt).toLocaleString())}${
-                          attempt.secondsUsed ? ` · ${formatClock(attempt.secondsUsed)}` : ""
-                        }</span>
-                      </span>
-                      <span class="attempt-bar"><span style="width:${attempt.percent}%"></span></span>
-                      <button class="icon-btn danger" title="Delete this attempt" data-action="delete-quiz-attempt"
-                        data-id="${esc(attempt.id)}">×</button>
-                    </li>`,
-                )
-                .join("")}</ol>`
+            ? attemptTable(attempts)
             : `<p class="muted small">No attempts yet — finish a quiz and your score lands here.</p>`
         }
       </section>`;
@@ -915,6 +2199,7 @@
     const best = attempts.reduce((top, attempt) => Math.max(top, attempt.percent), 0);
     const shortCount = quiz.items.filter((item) => item.type === "short").length;
     const choiceCount = quiz.items.length - shortCount;
+    const draft = readQuizDraft(kit.id);
 
     return `
       <div class="quiz-hero">
@@ -927,13 +2212,42 @@
           </p>
           <div class="quiz-facts">
             <span class="pill">${plural(choiceCount, "multiple choice question")}</span>
-            ${shortCount ? `<span class="pill">${plural(shortCount, "short answer")} · AI marked</span>` : ""}
+            ${shortCount ? `<span class="pill">${plural(shortCount, "short answer")} · marked ${aiMarkLabel()}</span>` : ""}
             ${attempts.length ? `<span class="pill accent">Best ${best}%</span>` : `<span class="pill">No attempts yet</span>`}
           </div>
         </div>
-        <button class="btn primary lg" data-action="start-quiz">Start quiz</button>
+        <button class="btn primary lg" data-action="start-quiz">${draft ? "Start over" : "Start quiz"}</button>
       </div>
+      ${draft ? renderQuizDraftBanner(draft, quiz) : ""}
       ${renderAttempts(kit)}`;
+  }
+
+  function renderQuizDraftBanner(draft, quiz) {
+    const total = Array.isArray(draft.items) && draft.items.length ? draft.items.length : quiz.items.length;
+    const answered = Object.keys(draft.results || {}).length;
+    const position = Math.min(total, (Number(draft.index) || 0) + 1);
+    return `
+      <div class="quiz-draft" role="status">
+        <div class="quiz-draft-text">
+          <strong>You have a quiz in progress</strong>
+          <span class="muted small">${answered} of ${total} marked · you were on question ${position}</span>
+        </div>
+        <div class="quiz-draft-actions">
+          <button class="btn small primary" data-action="resume-quiz">Resume</button>
+          <button class="btn small ghost" data-action="discard-draft">Discard</button>
+        </div>
+      </div>`;
+  }
+
+  /** Where short answers get marked — the wording should match the engine. */
+  function aiMarkLabel() {
+    return StudyForge.ai.isAiEnabled() ? "by AI" : "on this device";
+  }
+
+  /** The questions in play: a full set, or the missed-only retry subset. */
+  function activeQuizItems(kit) {
+    if (quizState.items && quizState.items.length) return quizState.items;
+    return (kit.quiz && kit.quiz.items) || [];
   }
 
   function renderQuizDots(items) {
@@ -989,7 +2303,7 @@
     const percent = Math.round((result.score || 0) * 100);
     const marker = result.markedBy === "ai" ? "marked by AI" : result.markedBy === "offline" ? "marked offline" : "marked automatically";
     return `
-      <div class="quiz-feedback ${result.correct ? "ok" : "bad"}">
+      <div class="quiz-feedback ${result.correct ? "ok" : "bad"}" role="status" aria-live="polite">
         <div class="feedback-head">
           <span class="feedback-icon">${result.correct ? "✓" : "→"}</span>
           <strong>${result.correct ? "Correct" : "Not quite"}</strong>
@@ -1006,8 +2320,7 @@
   }
 
   function renderQuizRunner(kit) {
-    const quiz = kit.quiz;
-    const items = quiz.items;
+    const items = activeQuizItems(kit);
     const index = Math.min(quizState.index, items.length - 1);
     const item = items[index];
     const answer = quizState.answers[index];
@@ -1057,7 +2370,11 @@
 
         <footer class="quiz-foot">
           <span class="muted tiny">${
-            marked ? "Locked in — answers cannot be changed." : `${markedCount} of ${items.length} marked · answers lock when marked`
+            marked
+              ? "Locked in — answers cannot be changed."
+              : `${markedCount} of ${items.length} marked · 1–4 to choose, Enter to continue${
+                  item.type === "short" ? " (⌘/Ctrl-Enter to mark)" : ""
+                }`
           }</span>
           <button class="btn primary" data-action="quiz-next" ${marking || (!marked && !hasAnswer) ? "disabled" : ""}>
             ${marking ? '<span class="spinner"></span>' : ""}${label}
@@ -1091,11 +2408,50 @@
           <p class="muted small">
             ${attempt.correct} of ${attempt.total} correct${
               attempt.secondsUsed ? ` · ${formatClock(attempt.secondsUsed)}` : ""
-            }${shortCount ? ` · ${plural(shortCount, "AI-marked short answer")}` : ""}
+            }${shortCount ? ` · ${plural(shortCount, "short answer")} marked ${aiMarkLabel()}` : ""}
           </p>
+          ${(() => {
+            const attempts = (quiz.attempts || []).filter((entry) => entry.id !== attempt.id);
+            const previous = attempts[0];
+            if (!previous) return "";
+            const delta = percent - previous.percent;
+            return `<p class="result-delta ${delta >= 0 ? "up" : "down"}">${
+              delta === 0
+                ? "Same score as last time."
+                : `${delta > 0 ? "▲" : "▼"} ${Math.abs(delta)} points ${delta > 0 ? "better" : "lower"} than last time (${previous.percent}%).`
+            }</p>`;
+          })()}
+          ${(() => {
+            const timed = (attempt.answers || []).filter((entry) => entry.seconds > 0);
+            if (!timed.length) return "";
+            const average = Math.round(timed.reduce((sum, entry) => sum + entry.seconds, 0) / timed.length);
+            const slowest = timed.slice().sort((a, b) => b.seconds - a.seconds)[0];
+            return `<p class="muted tiny">Average ${average}s per question${
+              slowest ? ` · slowest was ${slowest.seconds}s` : ""
+            }.</p>`;
+          })()}
+          <div class="result-split">
+            ${["mcq", "short"]
+              .map((type) => {
+                const rows = attempt.answers.filter((entry) => (entry.type === "short" ? "short" : "mcq") === type);
+                if (!rows.length) return "";
+                const right = rows.filter((entry) => entry.correct).length;
+                return `<span class="split-pill">${type === "mcq" ? "Multiple choice" : "Short answer"} ${right}/${
+                  rows.length
+                }</span>`;
+              })
+              .join("")}
+          </div>
           <div class="row tight">
-            <button class="btn primary" data-action="retry-quiz">Try again</button>
-            <button class="btn" data-action="make-quiz" data-id="${esc(kit.id)}">New questions</button>
+            <button class="btn primary" data-action="practise-missed" ${attempt.correct === attempt.total ? "disabled" : ""}>Practise missed</button>
+            ${
+              store.deckSchedule(kit.id).due
+                ? `<button class="btn" data-action="review-all-due" data-id="${esc(kit.id)}">Revise ${store.deckSchedule(kit.id).due} card${
+                    store.deckSchedule(kit.id).due === 1 ? "" : "s"
+                  }</button>`
+                : ""
+            }
+            <button class="btn" data-action="retry-quiz">Try again</button>
             <button class="btn ghost" data-action="quiz-back">Back to overview</button>
           </div>
         </div>
@@ -1105,13 +2461,13 @@
       <ol class="quiz review-list">
         ${attempt.answers
           .map((entry, index) => {
-            const item = quiz.items[index] || {};
+            const item = (quizState.attemptItems || quiz.items)[index] || {};
             return `
               <li class="review-item ${entry.correct ? "q-correct" : "q-wrong"}">
                 <div class="review-item-head">
                   <span class="q-number">${index + 1}</span>
                   <span class="badge ${entry.correct ? "ready" : "error"}">${entry.correct ? "Correct" : "Incorrect"}</span>
-                  ${entry.type === "short" ? `<span class="pill tiny-pill">${Math.round(entry.score * 100)}% · ${esc(entry.markedBy === "ai" ? "AI marked" : "offline marked")}</span>` : ""}
+                  ${entry.type === "short" ? `<span class="pill tiny-pill">${Math.round(entry.score * 100)}% · ${esc(entry.markedBy === "ai" ? "AI marked" : "on-device marked")}</span>` : ""}
                 </div>
                 <p class="q-text">${esc(entry.question || item.question || "")}</p>
                 <p class="answer-line"><span class="muted">Your answer:</span> ${esc(entry.given || "—")}</p>
@@ -1148,7 +2504,59 @@
       : "";
   }
 
+  /** A cross-kit review session: the same card UI, but sourced kit by kit. */
+  function renderMixedReview() {
+    const step = mixedReview.order[mixedReview.index];
+    if (!step) {
+      mixedReview = null;
+      return "";
+    }
+    const kit = store.getKit(step.kitId);
+    const card = kit && kit.flashcards && kit.flashcards.items[step.cardIndex];
+    if (!kit || !card) {
+      return `<p class="muted small">That card is gone.</p>`;
+    }
+    return `
+      <div class="deck mixed-review">
+        <div class="deck-bar">
+          <span class="muted tiny">Card ${mixedReview.index + 1} of ${mixedReview.order.length} · across ${plural(
+            new Set(mixedReview.order.map((entry) => entry.kitId)).size,
+            "kit",
+          )}</span>
+          <span class="muted tiny">${esc(kit.name)}</span>
+        </div>
+        <div class="fc-stage">
+          <div class="fc-face fc-front mixed-face">
+            <span class="fc-side">Prompt</span>
+            <span class="fc-text">${esc(card.front)}</span>
+            <span class="fc-hint">From ${esc(kit.name)}</span>
+          </div>
+        </div>
+        <div class="mixed-answer" ${mixedReview.revealed ? "" : "hidden"}>
+          <span class="fc-side">Answer</span>
+          <p>${esc(card.back)}</p>
+        </div>
+        <div class="row center tight">
+          <button class="btn small" data-action="mixed-reveal">${mixedReview.revealed ? "Marked" : "Show answer"}</button>
+          <button class="btn small again" data-action="mixed-again" ${mixedReview.revealed ? "" : "disabled"}>Still learning</button>
+          <button class="btn small known" data-action="mixed-known" ${mixedReview.revealed ? "" : "disabled"}>Got it</button>
+          <button class="btn small ghost" data-action="mixed-stop">End session</button>
+        </div>
+      </div>`;
+  }
+
   function renderKitFlashcards(kit, resources) {
+    if (mixedReview) {
+      return `<section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Catch-up review</h2>
+            <p class="muted tiny">Every card that is due, across the whole library.</p>
+          </div>
+        </div>
+        ${renderMixedReview()}
+      </section>`;
+    }
     const withDocs = resources.filter((resource) => resource.document);
     const cards = kit.flashcards;
 
@@ -1167,7 +2575,9 @@
             }</button>
             ${
               cards
-                ? `<button class="btn small" data-action="download-flashcards" data-id="${esc(kit.id)}">Download .md</button>`
+                ? `<button class="btn small" data-action="print-deck" data-id="${esc(kit.id)}">Print deck</button>
+                   <button class="btn small" data-action="download-flashcards" data-id="${esc(kit.id)}">Download .md</button>
+                   <button class="btn small" data-action="download-flashcards-csv" data-id="${esc(kit.id)}">Export for Anki</button>`
                 : ""
             }
           </div>
@@ -1183,9 +2593,147 @@
       </section>`;
   }
 
+  /** Words that carry no meaning for a typed-answer check. */
+  const TYPING_STOPWORDS = new Set(
+    "a an the of to and or in on at for with from by is are was were be been being that this these those it its as into than then so such".split(
+      " ",
+    ),
+  );
+
+  /** Loose comparison so a typed answer only has to mean the same thing. */
+  function compareTyped(expected, given) {
+    const clean = (text) =>
+      String(text || "")
+        .toLowerCase()
+        .replace(/[’']/g, "")
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    const want = clean(expected);
+    const got = clean(given);
+    if (!got) return { verdict: "empty", ratio: 0 };
+    if (want === got) return { verdict: "correct", ratio: 1 };
+    if (want.length < 24 && (want.includes(got) || got.includes(want))) {
+      return { verdict: got.length >= want.length * 0.6 ? "correct" : "close", ratio: 0.9 };
+    }
+    const wantWords = want.split(" ").filter((word) => word.length > 2 && !TYPING_STOPWORDS.has(word));
+    if (!wantWords.length) return { verdict: want === got ? "correct" : "close", ratio: 0.5 };
+    const givenSet = new Set(got.split(" "));
+    const hits = wantWords.filter((word) => givenSet.has(word)).length;
+    const ratio = hits / wantWords.length;
+    return { verdict: ratio >= 0.6 ? "correct" : ratio >= 0.3 ? "close" : "wrong", ratio };
+  }
+
+  function typingStage(card, frontLabel, backLabel) {
+    const verdict = flashState.typedVerdict;
+    const message = verdict
+      ? verdict.verdict === "correct"
+        ? "That matches — nice recall."
+        : verdict.verdict === "close"
+          ? "Close. Compare with the card and rate yourself honestly."
+          : "Not quite. Read the answer, then rate it honestly."
+      : "";
+    return `
+      <div class="fc-stage">
+        <div class="fc-typing">
+          <span class="fc-side">${frontLabel}</span>
+          <p class="fc-text">${esc(card.front)}</p>
+          <label class="sr-only" for="card-typed">Your answer</label>
+          <textarea id="card-typed" class="type-input" data-card-typed rows="3"
+            placeholder="Type the ${backLabel.toLowerCase()} from memory…">${esc(flashState.typed)}</textarea>
+          <div class="row tight">
+            <button class="btn primary small" data-action="card-check-typed">Check</button>
+            <button class="btn small ghost" data-action="toggle-typing">Back to flipping</button>
+          </div>
+          ${
+            verdict
+              ? `<div class="typed-verdict ${verdict.verdict}">
+                   <p>${esc(message)}</p>
+                   <p class="typed-answer"><span class="fc-side">${backLabel}</span> ${esc(card.back)}</p>
+                 </div>`
+              : ""
+          }
+        </div>
+      </div>`;
+  }
+
   function renderDeckEmpty(documentCount) {
     if (!documentCount) return "";
     return `<p class="muted small">No flashcards yet. Generate a deck and it will be saved with this study kit.</p>`;
+  }
+
+  /**
+   * Days until the kit's exam, with a pace hint: how many cards a day it takes
+   * to have seen every card twice before the paper.
+   */
+  function examCountdown(kit) {
+    if (!kit.examDate) return null;
+    const target = new Date(`${kit.examDate}T23:59:59`);
+    const days = Math.ceil((target.getTime() - Date.now()) / 86400000);
+    if (!Number.isFinite(days)) return null;
+    if (days < 0) return { days, label: `Exam was ${plural(Math.abs(days), "day")} ago`, past: true };
+    const label =
+      days === 0 ? "Exam today" : days === 1 ? "Exam tomorrow" : `Exam in ${days} days`;
+    const total = kit.flashcards ? kit.flashcards.items.length : 0;
+    const perDay = days > 0 && total ? Math.ceil((total * 2) / days) : 0;
+    return { days, label, past: false, perDay, total };
+  }
+
+  /** "in 3 days", "in 2 hours", "due now" — for review scheduling text. */
+  function dueLabel(dueAt) {
+    const ms = new Date(dueAt).getTime() - Date.now();
+    if (!Number.isFinite(ms) || ms <= 0) return "due now";
+    const minutes = Math.round(ms / 60000);
+    if (minutes < 60) return `in ${minutes} minute${minutes === 1 ? "" : "s"}`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return `in ${hours} hour${hours === 1 ? "" : "s"}`;
+    const days = Math.round(hours / 24);
+    return `in ${days} day${days === 1 ? "" : "s"}`;
+  }
+
+  /** Stable progress key for a card: its prompt text, so regeneration keeps it. */
+  function cardKey(card) {
+    return String(card.front || "").toLowerCase().replace(/\s+/g, " ").trim();
+  }
+
+  /**
+   * The cards this learner keeps getting wrong: most lapses first, then the
+   * lowest ease factor, then anything still "learning".
+   */
+  function hardestCards(kit) {
+    const ratings = (kit.flashcards && kit.flashcards.ratings) || {};
+    return kit.flashcards.items
+      .map((card, index) => ({ card, index, rating: ratings[cardKey(card)] }))
+      .filter((entry) => entry.rating && (entry.rating.lapses > 0 || entry.rating.state === "again"))
+      .sort(
+        (a, b) =>
+          (b.rating.lapses || 0) - (a.rating.lapses || 0) ||
+          (a.rating.ease || 2.5) - (b.rating.ease || 2.5),
+      )
+      .slice(0, 10)
+      .map((entry) => entry.index);
+  }
+
+  /** Progress for the current deck, derived from the saved ratings. */
+  function deckProgress(kit) {
+    const ratings = (kit.flashcards && kit.flashcards.ratings) || {};
+    const now = Date.now();
+    let known = 0;
+    let again = 0;
+    let due = 0;
+    let unseen = 0;
+    for (const card of kit.flashcards.items) {
+      const rating = ratings[cardKey(card)];
+      if (!rating) {
+        unseen += 1;
+        due += 1;
+        continue;
+      }
+      if (rating.state === "known") known += 1;
+      else again += 1;
+      if (new Date(rating.dueAt).getTime() <= now) due += 1;
+    }
+    return { known, again, due, unseen };
   }
 
   function renderDeck(kit) {
@@ -1196,48 +2744,80 @@
     if (!card) return "";
 
     const vocab = kit.flashcards.style !== "question";
-    const frontLabel = vocab ? "Term" : "Question";
-    const backLabel = vocab ? "Definition" : "Answer";
-    const knownCount = Object.keys(flashState.known).length;
-    const againCount = Object.keys(flashState.again).length;
+    // Reverse mode asks for the term instead of the meaning.
+    const reversed = Boolean(flashState.reversed);
+    const prompt = reversed ? card.back : card.front;
+    const answer = reversed ? card.front : card.back;
+    const frontLabel = reversed ? vocab ? "Definition" : "Answer" : vocab ? "Term" : "Question";
+    const backLabel = reversed ? vocab ? "Term" : "Question" : vocab ? "Definition" : "Answer";
+    const progress = deckProgress(kit);
+    const schedule = store.deckSchedule(kit.id);
+    const knownCount = progress.known;
+    const againCount = progress.again;
     const percent = Math.round((position / order.length) * 100);
+
+    if (flashState.finished) return renderDeckSummary(kit, progress);
+    if (matchState.active && matchState.kitId === kit.id) return renderMatch(kit);
 
     return `
       <div class="deck">
         <div class="deck-bar">
           <span class="muted tiny">Card ${position + 1} of ${order.length}${
-            flashState.shuffled ? " · shuffled" : ""
+            flashState.reviewMode ? " · review" : flashState.shuffled ? " · shuffled" : ""
           }</span>
-          <span class="muted tiny">${knownCount} known${againCount ? ` · ${againCount} to review` : ""}</span>
+          <span class="muted tiny">${knownCount} known${againCount ? ` · ${againCount} to review` : ""}${
+            progress.due ? ` · ${progress.due} due` : ""
+          }</span>
         </div>
         <div class="deck-meter"><span style="width:${percent}%"></span></div>
+        <p class="deck-plan">
+          ${
+            progress.due
+              ? `<strong>${progress.due}</strong> card${progress.due === 1 ? "" : "s"} to revise now`
+              : `<strong>All caught up</strong> — nothing due`
+          }${schedule.later ? ` · ${schedule.later} more in the next week` : ""}${
+            schedule.nextDueAt ? ` · next ${dueLabel(schedule.nextDueAt)}` : ""
+          }${
+            examCountdown(kit) && !examCountdown(kit).past && examCountdown(kit).perDay
+              ? ` · ${examCountdown(kit).perDay} a day clears the deck twice before the exam`
+              : ""
+          }
+        </p>
 
-        <div class="fc-stage">
+        ${
+          flashState.typing
+            ? typingStage({ ...card, front: prompt, back: answer }, frontLabel, backLabel)
+            : `<div class="fc-stage">
           <button class="flashcard ${flashState.flipped ? "is-flipped" : ""}" data-action="flip-card"
             aria-label="Flashcard — click to flip" aria-pressed="${flashState.flipped}">
             <span class="fc-inner">
               <span class="fc-face fc-front">
                 <span class="fc-side">${frontLabel}</span>
-                <span class="fc-text">${esc(card.front)}</span>
+                <span class="fc-text">${esc(prompt)}</span>
                 <span class="fc-hint">Click or press Space to flip</span>
               </span>
               <span class="fc-face fc-back">
                 <span class="fc-side">${backLabel}</span>
-                <span class="fc-text">${esc(card.back)}</span>
+                <span class="fc-text">${esc(answer)}</span>
                 <span class="fc-hint">Click or press Space to flip back</span>
               </span>
             </span>
           </button>
-        </div>
+        </div>`
+        }
 
         ${card.source ? `<p class="muted tiny center">From ${esc(card.source)}</p>` : ""}
 
         <div class="fc-controls">
           <button class="icon-btn" data-action="prev-card" title="Previous card" aria-label="Previous card"
             ${position === 0 ? "disabled" : ""}>${icon("arrowLeft")}</button>
-          <button class="btn small primary fc-flip-btn" data-action="flip-card">
+          ${
+            flashState.typing
+              ? ""
+              : `<button class="btn small primary fc-flip-btn" data-action="flip-card">
             <span data-flip-label>${flashState.flipped ? "Show prompt" : "Show answer"}</span>
-          </button>
+          </button>`
+          }
           <button class="icon-btn" data-action="next-card" title="Next card" aria-label="Next card"
             ${position >= order.length - 1 ? "disabled" : ""}>${icon("arrowRight")}</button>
         </div>
@@ -1246,16 +2826,260 @@
           <button class="btn small again" data-action="card-again">Still learning</button>
           <button class="btn small known" data-action="card-known">Got it</button>
         </div>
+        ${
+          flashState.lastScheduled
+            ? `<p class="fc-scheduled">“${esc(flashState.lastScheduled.front)}” comes back ${esc(
+                dueLabel(flashState.lastScheduled.dueAt),
+              )}.</p>`
+            : ""
+        }
 
         <div class="row center tight deck-tools">
+          ${
+            progress.due
+              ? `<button class="btn small" data-action="review-due">Review ${progress.due} due</button>`
+              : ""
+          }
+          ${
+            againCount
+              ? `<button class="btn small ghost" data-action="review-again">Still learning (${againCount})</button>`
+              : ""
+          }
+          ${
+            hardestCards(kit).length
+              ? `<button class="btn small ghost" data-action="review-hardest">Hardest (${hardestCards(kit).length})</button>`
+              : ""
+          }
+          ${
+            progress.unseen
+              ? `<button class="btn small ghost" data-action="review-unseen">Unseen (${progress.unseen})</button>`
+              : ""
+          }
+          <button class="btn small ghost" data-action="toggle-typing">${
+            flashState.typing ? "Flip mode" : "Type answers"
+          }</button>
+          <button class="btn small ghost" data-action="reverse-cards" aria-pressed="${flashState.reversed}">${
+            flashState.reversed ? "Term first" : "Meaning first"
+          }</button>
+          ${
+            items.length >= 3
+              ? `<button class="btn small ghost" data-action="start-match">Match game</button>`
+              : ""
+          }
           <button class="btn small ghost" data-action="shuffle-cards">Shuffle</button>
-          <button class="btn small ghost" data-action="restart-cards">Restart</button>
           <button class="btn small ghost" data-action="deck-list">${
             flashState.showList ? "Back to card" : "Browse all"
           }</button>
+          <details class="deck-more">
+            <summary class="btn small ghost">Edit deck</summary>
+            <div class="deck-more-body">
+              <button class="btn small ghost" data-action="add-card">Add card</button>
+              <button class="btn small ghost" data-action="import-cards">Paste cards</button>
+              <button class="btn small ghost" data-action="edit-card">Edit card</button>
+              <button class="btn small ghost" data-action="restart-cards">Restart</button>
+              ${
+                knownCount || againCount
+                  ? `<button class="btn small ghost" data-action="reset-progress">Reset progress</button>`
+                  : ""
+              }
+            </div>
+          </details>
         </div>
         ${flashState.showList ? renderDeckList(items) : ""}
       </div>`;
+  }
+
+  /** The end of a deck: what was learned, and where to go next. */
+  function renderDeckSummary(kit, progress) {
+    const schedule = store.deckSchedule(kit.id);
+    const total = kit.flashcards.items.length;
+    const known = progress.known;
+    const again = progress.again;
+    const percent = total ? Math.round((known / total) * 100) : 0;
+    return `
+      <div class="deck-summary">
+        <p class="eyebrow">Deck finished</p>
+        <h3>${percent >= 80 ? "Strong run." : percent >= 50 ? "Good progress." : "Keep going — this is normal."}</h3>
+        <div class="summary-figures">
+          <div><span class="summary-figure">${known}</span><span class="muted tiny">known</span></div>
+          <div><span class="summary-figure">${again}</span><span class="muted tiny">still learning</span></div>
+          <div><span class="summary-figure">${schedule.due}</span><span class="muted tiny">due now</span></div>
+        </div>
+        <div class="summary-bar"><span style="width:${percent}%"></span></div>
+        <p class="muted small">${
+          schedule.nextDueAt
+            ? `The next card comes back ${esc(dueLabel(schedule.nextDueAt))}.`
+            : "Everything is scheduled for later."
+        }</p>
+        <div class="row center tight">
+          ${again ? `<button class="btn primary small" data-action="review-again">Review ${again} still learning</button>` : ""}
+          <button class="btn small" data-action="restart-cards">Go through again</button>
+          <a class="btn small ghost" href="#/kit/${esc(kit.id)}/questions">Take the quiz</a>
+        </div>
+      </div>`;
+  }
+
+  /* --------------------------- match game --------------------------- */
+
+  const MATCH_PAIRS = 6;
+
+  function stopMatchClock() {
+    if (matchTick) clearInterval(matchTick);
+    matchTick = null;
+  }
+
+  /** Six terms and six definitions, shuffled into one board. */
+  function startMatch(kit) {
+    if (!kit || !kit.flashcards) return;
+    const items = kit.flashcards.items.slice(0, MATCH_PAIRS);
+    if (items.length < 3) {
+      toast("Add a few more cards before playing match.", "error");
+      return;
+    }
+    const tiles = [];
+    items.forEach((card, index) => {
+      tiles.push({ pair: index, kind: "term", text: card.front });
+      tiles.push({ pair: index, kind: "answer", text: card.back });
+    });
+    for (let i = tiles.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [tiles[i], tiles[j]] = [tiles[j], tiles[i]];
+    }
+    matchState = {
+      kitId: kit.id,
+      active: true,
+      tiles,
+      picked: [],
+      matched: [],
+      wrong: 0,
+      startedAt: Date.now(),
+      finished: false,
+    };
+    stopMatchClock();
+    matchTick = setInterval(() => {
+      const clock = document.getElementById("match-clock");
+      if (!clock || !matchState.active || matchState.finished) return;
+      clock.textContent = formatClock((Date.now() - matchState.startedAt) / 1000);
+    }, 500);
+    flashState.showList = false;
+    // Coming back from the game should land on a card, not the end summary.
+    flashState.finished = false;
+    render();
+  }
+
+  function pickMatchTile(index) {
+    if (matchState.finished || matchState.picked.includes(index) || matchState.matched.includes(index)) return;
+    matchState.picked.push(index);
+    if (matchState.picked.length < 2) {
+      render();
+      return;
+    }
+    const [first, second] = matchState.picked;
+    const a = matchState.tiles[first];
+    const b = matchState.tiles[second];
+    if (a && b && a.pair === b.pair) {
+      matchState.matched.push(first, second);
+      matchState.picked = [];
+      const total = matchState.tiles.length;
+      if (matchState.matched.length >= total) {
+        matchState.finished = true;
+        stopMatchClock();
+        store.recordActivity("cards", 1);
+      }
+      render();
+      return;
+    }
+    matchState.wrong += 1;
+    matchState.picked = [];
+    // Flash the two wrong tiles, then settle back.
+    render();
+    const board = els.view.querySelector(".match-board");
+    if (board) {
+      [first, second].forEach((tile) => {
+        const node = board.querySelector(`[data-tile="${tile}"]`);
+        if (node) node.classList.add("miss");
+      });
+    }
+    setTimeout(() => {
+      const current = els.view.querySelector(".match-board");
+      if (current) current.querySelectorAll(".miss").forEach((node) => node.classList.remove("miss"));
+    }, 380);
+  }
+
+  function renderMatch(kit) {
+    const tiles = matchState.tiles;
+    const matched = new Set(matchState.matched);
+    const pairs = tiles.length / 2;
+    const seconds = Math.max(0, Math.round((Date.now() - matchState.startedAt) / 1000));
+    if (matchState.finished) {
+      const accuracy = Math.max(0, Math.round((pairs / Math.max(1, pairs + matchState.wrong)) * 100));
+      return `
+        <div class="match-wrap">
+          <div class="match-result">
+            <p class="eyebrow">Board cleared</p>
+            <h3>${formatClock(seconds)} · ${pairs} pairs</h3>
+            <p class="muted small">${matchState.wrong ? `${plural(matchState.wrong, "wrong pick")}.` : "No wrong picks at all."}
+              ${accuracy}% of your picks were right.</p>
+            <div class="row center tight">
+              <button class="btn primary small" data-action="start-match">Play again</button>
+              <button class="btn small" data-action="stop-match">Back to cards</button>
+            </div>
+          </div>
+        </div>`;
+    }
+    return `
+      <div class="match-wrap">
+        <div class="match-bar">
+          <span class="muted tiny">Tap a term and its meaning</span>
+          <span class="match-progress">${matched.size / 2}/${pairs} pairs</span>
+          <span class="muted tiny" id="match-clock">${formatClock(seconds)}</span>
+          <button class="btn small ghost" data-action="stop-match">Back to cards</button>
+        </div>
+        <div class="match-board">
+          ${tiles
+            .map((tile, index) => {
+              const done = matched.has(index);
+              const picked = matchState.picked.includes(index);
+              return `<button class="match-tile ${tile.kind} ${done ? "done" : ""} ${picked ? "picked" : ""}"
+                data-action="match-tile" data-tile="${index}" ${done ? "disabled" : ""}>
+                <span class="match-kind">${tile.kind === "term" ? "Term" : "Meaning"}</span>
+                <span class="match-text">${esc(tile.text)}</span>
+              </button>`;
+            })
+            .join("")}
+        </div>
+      </div>`;
+  }
+
+  /** Gather every due card in the library, hardest kits first, capped at 40. */
+  function startMixedReview() {
+    const now = Date.now();
+    const order = [];
+    store.get().kits.forEach((kit) => {
+      const deck = kit.flashcards;
+      if (!deck || !deck.items.length) return;
+      const ratings = deck.ratings || {};
+      const due = [];
+      deck.items.forEach((card, cardIndex) => {
+        const rating = ratings[cardKey(card)];
+        if (!rating || new Date(rating.dueAt).getTime() <= now) {
+          due.push({ kitId: kit.id, cardIndex, lapses: rating ? rating.lapses || 0 : 0 });
+        }
+      });
+      due.sort((a, b) => b.lapses - a.lapses);
+      order.push(...due);
+    });
+    if (!order.length) {
+      toast("Nothing is due right now — come back later.", "info");
+      return;
+    }
+    mixedReview = { order: order.slice(0, 40), index: 0, revealed: false };
+    if (route.name !== "kit" || route.tab !== "flashcards") {
+      const first = mixedReview.order[0];
+      window.location.hash = `#/kit/${first.kitId}/flashcards`;
+    } else {
+      render();
+    }
   }
 
   function renderDeckList(items) {
@@ -1309,6 +3133,8 @@
           </div>
           <div class="row tight">
             <button class="btn small primary" data-action="start-exam" data-id="${esc(kit.id)}">Start exam</button>
+            <button class="btn small" data-action="print-exam" data-id="${esc(kit.id)}">Print paper</button>
+            <button class="btn small" data-action="download-exam" data-id="${esc(kit.id)}">Download .md</button>
             <button class="btn small" data-action="make-exam" data-id="${esc(kit.id)}">New exam</button>
           </div>
         </div>
@@ -1320,10 +3146,76 @@
           <div><span class="exam-figure">${Math.round((exam.durationMinutes * 60) / exam.items.length)}</span><span class="muted tiny">seconds / question</span></div>
           <div><span class="exam-figure">${attempt ? `${attempt.correct}/${attempt.total}` : "—"}</span><span class="muted tiny">last score</span></div>
         </div>
+        ${(() => {
+          const sittings = exam.attempts || [];
+          if (sittings.length < 2) return "";
+          const percents = sittings.map((entry) => entry.percent);
+          const best = Math.max(...percents);
+          const average = Math.round(percents.reduce((sum, value) => sum + value, 0) / percents.length);
+          return `<p class="muted tiny">Across ${plural(sittings.length, "sitting")}: best ${best}% · average ${average}%.</p>`;
+        })()}
+        ${renderExamDraftBanner(kit)}
         <div class="notice subtle">
           The clock keeps running if you leave this tab, and the exam submits itself when time is up.
+          Your answers are saved as you go, so a reload will not lose the paper.
           Only multiple-choice questions are used so the paper can be marked automatically.
         </div>
+      </section>
+      ${renderExamAttempts(kit)}`;
+  }
+
+  function renderExamDraftBanner(kit) {
+    const draft = readExamDraft(kit.id);
+    if (!draft) return "";
+    const left = Math.max(0, Math.round((draft.endsAt - Date.now()) / 1000));
+    const answered = Object.keys(draft.answers || {}).length;
+    return `
+      <div class="quiz-draft" role="status">
+        <div class="quiz-draft-text">
+          <strong>${left ? "You have an exam in progress" : "An unfinished exam ran out of time"}</strong>
+          <span class="muted small">${
+            left
+              ? `${formatClock(left)} left · ${answered} of ${kit.exam.items.length} answered`
+              : `${answered} of ${kit.exam.items.length} answered — resuming submits it straight away`
+          }</span>
+        </div>
+        <div class="quiz-draft-actions">
+          <button class="btn small primary" data-action="resume-exam">Resume</button>
+          <button class="btn small ghost" data-action="discard-exam">Discard</button>
+        </div>
+      </div>`;
+  }
+
+  /** Saved exam sittings, each of which can be reviewed question by question. */
+  function renderExamAttempts(kit) {
+    const attempts = (kit.exam && kit.exam.attempts) || [];
+    if (!attempts.length) return "";
+    return `
+      <section class="panel attempts-panel">
+        <div class="panel-head">
+          <div>
+            <h2>Past exam sittings</h2>
+            <p class="muted tiny">Every submitted practice test is kept here.</p>
+          </div>
+        </div>
+        <ol class="attempt-list">
+          ${attempts
+            .map(
+              (attempt) => `
+                <li class="attempt-row">
+                  <span class="attempt-score ${attempt.percent >= 70 ? "good" : attempt.percent >= 50 ? "mid" : "low"}">${attempt.percent}%</span>
+                  <span class="attempt-main">
+                    <strong>${attempt.correct}/${attempt.total} correct</strong>
+                    <span class="muted tiny">${esc(new Date(attempt.takenAt).toLocaleString())}${
+                      attempt.secondsUsed ? ` · ${formatClock(attempt.secondsUsed)}` : ""
+                    }</span>
+                  </span>
+                  <span class="attempt-bar"><span style="width:${attempt.percent}%"></span></span>
+                  <button class="btn ghost small" data-action="review-exam-attempt" data-id="${esc(attempt.id)}">Review</button>
+                </li>`,
+            )
+            .join("")}
+        </ol>
       </section>`;
   }
 
@@ -1342,6 +3234,15 @@
           </div>
           <span class="muted tiny" id="exam-answered">${answered}/${exam.items.length} answered</span>
           <button class="btn small primary" data-action="submit-exam">Submit exam</button>
+        </div>
+        <div class="exam-palette" role="group" aria-label="Jump to a question">
+          ${exam.items
+            .map(
+              (_, index) =>
+                `<button class="palette-dot ${answers[index] !== undefined ? "done" : ""}" data-action="exam-jump" data-q="${index}"
+                  aria-label="Question ${index + 1}${answers[index] !== undefined ? " (answered)" : ""}">${index + 1}</button>`,
+            )
+            .join("")}
         </div>
         <ol class="quiz exam-questions">
           ${exam.items
@@ -1386,6 +3287,7 @@
             <p class="muted tiny">${result.timedOut ? "Time ran out — the paper was submitted automatically." : "Submitted."}</p>
           </div>
           <div class="row tight">
+            <button class="btn small" data-action="exam-overview">Past sittings</button>
             <button class="btn small" data-action="retake-exam">Retake</button>
             <button class="btn small" data-action="make-exam" data-id="${esc(kit.id)}">New exam</button>
           </div>
@@ -1551,30 +3453,97 @@
    * Toasts and modals
    * ------------------------------------------------------------------ */
 
-  function toast(message, type = "info") {
+  function toast(message, type = "info", action = null) {
     const node = document.createElement("div");
     node.className = `toast ${type}`;
-    node.textContent = message;
-    els.toasts.appendChild(node);
-    setTimeout(() => {
+    const label = document.createElement("span");
+    label.textContent = message;
+    node.appendChild(label);
+    const lifetime = action ? 9000 : 4200;
+    let timer = null;
+    const dismiss = () => {
+      if (timer) clearTimeout(timer);
       node.classList.add("leaving");
       setTimeout(() => node.remove(), 250);
-    }, 4200);
+    };
+    if (action) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "toast-action";
+      button.textContent = action.label;
+      button.addEventListener("click", () => {
+        dismiss();
+        action.onClick();
+      });
+      node.appendChild(button);
+    }
+    els.toasts.appendChild(node);
+    timer = setTimeout(dismiss, lifetime);
   }
+
+  /**
+   * Deleting is the one destructive action here, so give it a real undo: the
+   * whole state is snapshotted first and put back by the toast button.
+   */
+  function undoableDelete(apply, description) {
+    const snapshot = JSON.parse(store.exportData());
+    apply();
+    toast(description, "success", {
+      label: "Undo",
+      onClick: () => {
+        store.restore(snapshot);
+        render();
+        toast("Restored.", "info");
+      },
+    });
+  }
+
+  /** Where focus was before the dialog opened, so it can be put back. */
+  let modalReturnFocus = null;
 
   function closeModal() {
     els.modalRoot.innerHTML = "";
     els.modalRoot.hidden = true;
+    if (modalReturnFocus && document.contains(modalReturnFocus)) {
+      try {
+        modalReturnFocus.focus({ preventScroll: true });
+      } catch (error) {
+        /* the element may be gone */
+      }
+    }
+    modalReturnFocus = null;
+  }
+
+  /** Keep Tab inside an open dialog. */
+  function trapModalFocus(event) {
+    if (els.modalRoot.hidden || event.key !== "Tab") return;
+    const focusable = [
+      ...els.modalRoot.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    ].filter((el) => el.offsetParent !== null || el === document.activeElement);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
   }
 
   /**
-   * @param {{title:string, body:string, confirmLabel?:string, danger?:boolean, onConfirm?:Function, onMount?:Function}} options
+   * @param {{title:string, body:string, confirmLabel?:string, danger?:boolean, wide?:boolean,
+   *          onConfirm?:Function, onMount?:Function}} options
    */
   function openModal(options) {
+    modalReturnFocus = document.activeElement;
     els.modalRoot.hidden = false;
     els.modalRoot.innerHTML = `
       <div class="modal-backdrop" data-close></div>
-      <div class="modal" role="dialog" aria-modal="true" aria-label="${esc(options.title)}">
+      <div class="modal ${options.wide ? "modal-wide" : ""}" role="dialog" aria-modal="true" aria-label="${esc(options.title)}">
         <header class="modal-head">
           <h2>${esc(options.title)}</h2>
           <button class="icon-btn" data-close title="Close">×</button>
@@ -1594,7 +3563,14 @@
     });
     if (options.onMount) options.onMount(els.modalRoot);
     const firstField = els.modalRoot.querySelector("input, textarea, select");
-    if (firstField) setTimeout(() => firstField.focus(), 30);
+    const dialog = els.modalRoot.querySelector(".modal");
+    setTimeout(() => {
+      if (firstField) firstField.focus();
+      else if (dialog) {
+        dialog.setAttribute("tabindex", "-1");
+        dialog.focus();
+      }
+    }, 30);
   }
 
   function confirmDialog(title, message, confirmLabel = "Delete") {
@@ -1631,15 +3607,20 @@
         <div class="field"><label for="kit-subject">Subject / focus (optional)</label>
           <input id="kit-subject" type="text" placeholder="e.g. Year 11 Biology, Unit 2"></div>
         <div class="field"><label for="kit-class">Class</label>
-          <select id="kit-class">${classOptions(classId)}</select></div>`,
+          <select id="kit-class">${classOptions(classId)}</select></div>
+        <div class="field"><label for="kit-exam-date">Exam date (optional)</label>
+          <input id="kit-exam-date" type="date">
+          <span class="hint">Gives you a countdown and a daily card pace. You can add it later.</span></div>`,
       onConfirm: (root) => {
         const name = root.querySelector("#kit-name").value.trim();
         if (!name) return false;
+        const examDate = root.querySelector("#kit-exam-date").value;
         const kit = store.addKit({
           name,
           subject: root.querySelector("#kit-subject").value,
           classId: root.querySelector("#kit-class").value || null,
         });
+        if (/^\d{4}-\d{2}-\d{2}$/.test(examDate)) store.updateKit(kit.id, { examDate });
         toast("Study kit created.", "success");
         navigate(`#/kit/${kit.id}`);
       },
@@ -1737,200 +3718,489 @@
     });
   }
 
+  /* ------------------------------------------------------------------ *
+   * Settings
+   * ------------------------------------------------------------------ */
+
   const CUSTOM_MODEL = "__custom__";
 
-  function modelFilterLabel() {
-    return StudyForge.ai.MODEL_FILTER.join(", ");
+  const PROVIDER_ORDER = ["local", "gemini", "openrouter", "nvidia", "custom"];
+
+  function providerCard(id, draft) {
+    const info = StudyForge.ai.providers()[id];
+    const active = draft.provider === id;
+    const badge = id === "local" ? "No key" : info.needsKey && !draft.keys[id] ? "Key needed" : "Ready";
+    const ready = id === "local" || (info.needsKey ? Boolean(draft.keys[id]) : Boolean(draft.baseUrl));
+    return `
+      <button type="button" class="provider-card ${active ? "active" : ""}" data-provider="${id}">
+        <span class="provider-top">
+          <strong>${esc(info.label)}</strong>
+          <span class="provider-badge ${ready ? "ok" : "warn"}">${esc(badge)}</span>
+        </span>
+        <span class="provider-blurb">${esc(info.blurb)}</span>
+      </button>`;
   }
 
-  /** Options for the model select, always including the currently saved model. */
-  function modelOptionsHtml(currentModel) {
-    const cached = modelCache.models;
-    const ids = new Set([currentModel, StudyForge.ai.DEFAULT_MODEL, ...cached.map((model) => model.id)].filter(Boolean));
-    const options = [...ids]
-      .sort((a, b) => a.localeCompare(b))
-      .map(
-        (id) =>
-          `<option value="${esc(id)}" ${id === currentModel ? "selected" : ""}>${esc(id)}${
-            id === StudyForge.ai.DEFAULT_MODEL ? " (default)" : ""
-          }</option>`,
-      );
-    options.push(`<option value="${CUSTOM_MODEL}" ${ids.has(currentModel) ? "" : "selected"}>Custom model id…</option>`);
-    return options.join("");
+  function modelChoices(draft) {
+    const info = StudyForge.ai.providers()[draft.provider];
+    const saved = draft.models[draft.provider] || "";
+    const ids = new Set([info.model, saved, ...(draft.catalogue[draft.provider] || [])].filter(Boolean));
+    return [...ids];
   }
 
-  /** Populate the select in an open settings modal. */
-  function fillModelOptions(root, currentModel, { keepCustom = false } = {}) {
-    const select = root.querySelector("#set-model");
-    if (!select) return;
-    const previous = keepCustom ? select.value : currentModel;
-    select.innerHTML = modelOptionsHtml(currentModel);
-    if (previous && [...select.options].some((option) => option.value === previous)) select.value = previous;
-    syncCustomInput(root);
-  }
-
-  function syncCustomInput(root) {
-    const select = root.querySelector("#set-model");
-    const input = root.querySelector("#set-model-custom");
-    if (!select || !input) return;
-    const custom = select.value === CUSTOM_MODEL;
-    input.hidden = !custom;
-    if (custom && !input.value) input.value = "";
-  }
-
-  function readModelField(root) {
-    const select = root.querySelector("#set-model");
-    const input = root.querySelector("#set-model-custom");
-    if (select && select.value === CUSTOM_MODEL) {
-      const custom = input ? input.value.trim() : "";
-      return custom;
+  /** The provider-specific half of the settings form. */
+  function providerPanel(draft) {
+    const info = StudyForge.ai.providers()[draft.provider];
+    if (info.kind === "local") {
+      return `
+        <div class="notice subtle">
+          <strong>Nothing to set up.</strong> Study guides, flashcards, quizzes and practice tests are generated in
+          this tab from your notes. No key, no network, no cost. Connect an AI provider below for richer rewrites.
+        </div>`;
     }
-    return select ? select.value : "";
+
+    const key = draft.keys[draft.provider] || "";
+    const choices = modelChoices(draft);
+    const currentModel = draft.models[draft.provider] || info.model || "";
+
+    return `
+      <div class="field">
+        <label for="set-key">${esc(info.keyLabel)}</label>
+        <input id="set-key" type="password" autocomplete="off" spellcheck="false"
+          value="${esc(key)}" placeholder="${esc(info.keyPlaceholder || "")}">
+        <span class="hint">
+          Stored in this browser only. ${
+            info.keyUrl
+              ? `<a href="${esc(info.keyUrl)}" target="_blank" rel="noopener">Get a key →</a>`
+              : ""
+          }
+        </span>
+      </div>
+      ${
+        draft.provider === "custom"
+          ? `<div class="field">
+              <label for="set-base">Endpoint base URL</label>
+              <input id="set-base" type="text" spellcheck="false" value="${esc(draft.baseUrl)}"
+                placeholder="https://my-relay.example.workers.dev/v1">
+              <span class="hint">Any OpenAI-compatible base URL. Requests go to <code>/chat/completions</code> and <code>/models</code>.</span>
+            </div>`
+          : ""
+      }
+      <div class="field">
+        <label for="set-model">Model</label>
+        <select id="set-model">
+          ${choices
+            .map(
+              (id) =>
+                `<option value="${esc(id)}" ${id === currentModel ? "selected" : ""}>${esc(id)}${
+                  id === info.model ? " (recommended)" : ""
+                }</option>`,
+            )
+            .join("")}
+          <option value="${CUSTOM_MODEL}" ${choices.includes(currentModel) ? "" : "selected"}>Custom model id…</option>
+        </select>
+        <input id="set-model-custom" type="text" placeholder="model-id" hidden value="${
+          choices.includes(currentModel) ? "" : esc(currentModel)
+        }">
+        <div class="row tight" style="margin-top:6px">
+          <button type="button" class="btn small" id="set-models-refresh">Load models</button>
+          <button type="button" class="btn small" id="set-test">Test connection</button>
+          <span class="hint" id="set-provider-status"></span>
+        </div>
+      </div>`;
   }
 
-  async function loadModelCatalogue(root, { key, statusEl, button }) {
-    const apiKey = (key || "").trim();
-    if (!apiKey) {
-      if (statusEl) statusEl.textContent = "Enter your NVIDIA API key first.";
+  function settingsDraftFromStore() {
+    const settings = store.getSettings();
+    return {
+      provider: settings.provider || "local",
+      keys: {
+        gemini: settings.providerKeys.gemini || "",
+        openrouter: settings.providerKeys.openrouter || "",
+        nvidia: settings.providerKeys.nvidia || "",
+        custom: settings.providerKeys.custom || "",
+      },
+      baseUrl: settings.baseUrl || "",
+      models: { ...(settings.modelByProvider || {}) },
+      catalogue: {},
+      ocrLanguage: settings.ocrLanguage,
+      ocrScale: settings.ocrScale,
+      flashcardStyle: settings.flashcardStyle,
+      weeklyGoal: settings.weeklyGoal || 5,
+      savedModel: settings.model,
+    };
+  }
+
+  /** Read back a saved attempt: your answer next to the model answer. */
+  /* --------------------------- find in guide ------------------------ */
+
+  let docFind = { timer: 0, matches: [], index: 0 };
+
+  function scheduleDocFind(value) {
+    clearTimeout(docFind.timer);
+    docFind.timer = setTimeout(() => applyDocFind(String(value || "").trim()), 150);
+  }
+
+  function updateDocFindCounter() {
+    const counter = els.view.querySelector("[data-doc-find-count]");
+    if (!counter) return;
+    counter.textContent = docFind.matches.length
+      ? `${docFind.index + 1}/${docFind.matches.length}`
+      : "";
+  }
+
+  /** Undo any highlighting, leaving the rendered guide exactly as it was. */
+  function clearDocFind() {
+    const body = els.view.querySelector("[data-doc-body]");
+    if (body) {
+      body.querySelectorAll("mark.doc-hit").forEach((mark) => {
+        mark.replaceWith(document.createTextNode(mark.textContent));
+      });
+      body.normalize();
+    }
+    docFind.matches = [];
+    docFind.index = 0;
+    updateDocFindCounter();
+  }
+
+  /** Highlight every occurrence of the query inside the guide and jump to the first. */
+  function applyDocFind(query) {
+    const body = els.view.querySelector("[data-doc-body]");
+    if (!body) return;
+    clearDocFind();
+    if (query.length < 2) return;
+    const needle = query.toLowerCase();
+    const walker = document.createTreeWalker(body, 4 /* NodeFilter.SHOW_TEXT */, null);
+    const nodes = [];
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      const parent = node.parentElement;
+      if (!node.nodeValue.trim() || !parent) continue;
+      if (/^(SCRIPT|STYLE|MARK)$/.test(parent.tagName)) continue;
+      if (node.nodeValue.toLowerCase().includes(needle)) nodes.push(node);
+    }
+    for (const node of nodes) {
+      const text = node.nodeValue;
+      const lower = text.toLowerCase();
+      const fragment = document.createDocumentFragment();
+      let start = 0;
+      let at = lower.indexOf(needle, start);
+      while (at !== -1) {
+        if (at > start) fragment.appendChild(document.createTextNode(text.slice(start, at)));
+        const mark = document.createElement("mark");
+        mark.className = "doc-hit";
+        mark.textContent = text.slice(at, at + needle.length);
+        fragment.appendChild(mark);
+        start = at + needle.length;
+        at = lower.indexOf(needle, start);
+      }
+      if (start < text.length) fragment.appendChild(document.createTextNode(text.slice(start)));
+      node.replaceWith(fragment);
+    }
+    docFind.matches = [...body.querySelectorAll("mark.doc-hit")];
+    docFind.index = 0;
+    focusDocMatch();
+  }
+
+  function focusDocMatch() {
+    docFind.matches.forEach((mark, index) => mark.classList.toggle("current", index === docFind.index));
+    const current = docFind.matches[docFind.index];
+    if (current) current.scrollIntoView({ block: "center", behavior: "smooth" });
+    updateDocFindCounter();
+  }
+
+  function stepDocFind(direction) {
+    if (!docFind.matches.length) return;
+    const length = docFind.matches.length;
+    docFind.index = (docFind.index + direction + length) % length;
+    focusDocMatch();
+  }
+
+  /* --------------------------- read aloud --------------------------- */
+
+  /**
+   * Read the study guide with the browser's built-in speech synthesis. Works
+   * offline, needs no key, and reads in sentence-sized chunks so stopping is
+   * immediate.
+   */
+  function startSpeech(resource) {
+    if (!("speechSynthesis" in window) || typeof window.SpeechSynthesisUtterance !== "function") {
+      toast("This browser cannot read text aloud.", "error");
       return;
     }
-    if (button) button.disabled = true;
-    if (statusEl) statusEl.textContent = "Loading models from NVIDIA…";
+    stopSpeech();
+    const chunks = String(resource.document || "")
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/^#{1,6}\s*/gm, "")
+      .replace(/[*_`>#-]/g, " ")
+      .replace(/\|/g, " ")
+      .split(/(?<=[.!?])\s+/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 1);
+    if (!chunks.length) return;
 
-    try {
-      const { models } = await StudyForge.ai.listModels({ apiKey });
-      modelCache.models = models;
-      modelCache.loadedAt = Date.now();
-      const saved = readModelField(root) || store.getSettings().model;
-      fillModelOptions(root, saved, { keepCustom: true });
-      if (statusEl) {
-        statusEl.textContent = models.length
-          ? `${models.length} model(s) available. Only ${modelFilterLabel()} models are listed.`
-          : `No models matched ${modelFilterLabel()}. Use a custom model id.`;
+    speechState = { speaking: true, resourceId: resource.id };
+    render();
+    toast("Reading the study guide aloud. Press Stop reading to finish.", "info");
+
+    let index = 0;
+    const speakNext = () => {
+      if (!speechState.speaking) return;
+      if (index >= chunks.length) {
+        stopSpeech();
+        return;
       }
-      if (!models.length) {
-        const select = root.querySelector("#set-model");
-        if (select) {
-          select.value = CUSTOM_MODEL;
-          syncCustomInput(root);
-        }
+      const utterance = new window.SpeechSynthesisUtterance(chunks[index]);
+      utterance.rate = 1;
+      utterance.onend = () => {
+        index += 1;
+        speakNext();
+      };
+      utterance.onerror = () => stopSpeech();
+      window.speechSynthesis.speak(utterance);
+    };
+    speakNext();
+  }
+
+  function stopSpeech() {
+    if ("speechSynthesis" in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch (error) {
+        /* nothing to cancel */
       }
-    } catch (error) {
-      if (statusEl) statusEl.textContent = "Could not load models: " + StudyForge.ai.describeError(error);
-    } finally {
-      if (button) button.disabled = false;
     }
+    if (!speechState.speaking) return;
+    speechState = { speaking: false, resourceId: null };
+    if (route.name === "kit") render();
+  }
+
+  function openAttemptReview(attempt) {
+    const rows = (attempt.answers || [])
+      .map(
+        (entry, index) => `
+          <li class="review-row ${entry.correct ? "ok" : "bad"}">
+            <div class="review-head">
+              <span class="review-index">${index + 1}</span>
+              <span class="review-q">${esc(entry.question)}${
+                entry.seconds ? ` <span class="muted tiny">· ${entry.seconds}s</span>` : ""
+              }</span>
+              <span class="badge ${entry.correct ? "ready" : "error"}">${entry.correct ? "Correct" : "Review"}</span>
+            </div>
+            <p class="review-line"><span class="review-key">Your answer</span><span>${esc(entry.given || "— not answered —")}</span></p>
+            ${!entry.correct ? `<p class="review-line"><span class="review-key">Model answer</span><span>${esc(entry.expected || "")}</span></p>` : ""}
+            ${entry.feedback ? `<p class="review-line muted"><span class="review-key">Feedback</span><span>${esc(entry.feedback)}</span></p>` : ""}
+          </li>`,
+      )
+      .join("");
+    openModal({
+      title: `Attempt review — ${attempt.percent}%`,
+      wide: true,
+      confirmLabel: "Close",
+      body: `
+        <p class="muted small">${attempt.correct} of ${attempt.total} correct · ${esc(
+          new Date(attempt.takenAt).toLocaleString(),
+        )}${attempt.secondsUsed ? ` · took ${formatClock(attempt.secondsUsed)}` : ""}</p>
+        <ol class="review-list">${rows || '<li class="muted">This attempt has no saved answers.</li>'}</ol>`,
+      onConfirm: () => true,
+    });
+  }
+
+  function openShortcuts() {
+    openModal({
+      title: "Keyboard shortcuts",
+      confirmLabel: "Got it",
+      body: `
+        <div class="shortcut-list">
+          ${[
+            ["⌘K / Ctrl-K", "Search kits, resources and guide text"],
+            ["1 – 4", "Pick a quiz option"],
+            ["Enter", "Mark & next, or flip a card"],
+            ["⌘/Ctrl-Enter", "Mark a typed short answer"],
+            ["Space", "Flip a flashcard"],
+            ["← / →", "Previous / next card"],
+            ["1 / K · 2 / A", "Got it · show again"],
+            ["Enter", "Jump to the next find match in a guide"],
+            ["?", "This list"],
+            ["Esc", "Leave a guide find box or focus mode"],
+            ["⌘/Ctrl-Shift-X", "Leave a quiz run (progress is kept)"],
+            ["Esc", "Close a dialog"],
+          ]
+            .map(
+              ([keys, meaning]) =>
+                `<div class="shortcut-row"><kbd>${esc(keys)}</kbd><span>${esc(meaning)}</span></div>`,
+            )
+            .join("")}
+        </div>`,
+      onConfirm: () => true,
+    });
   }
 
   function openSettings(note) {
-    const settings = store.getSettings();
+    const draft = settingsDraftFromStore();
+    if (!draft.models[draft.provider] && draft.provider === "nvidia") draft.models.nvidia = draft.savedModel;
+
     openModal({
       title: "Settings",
       confirmLabel: "Save settings",
+      wide: true,
       body: `
         ${note ? `<div class="notice">${esc(note)}</div>` : ""}
-        <div class="field">
-          <label for="set-key">NVIDIA NIM API key</label>
-          <input id="set-key" type="password" autocomplete="off" spellcheck="false" value="${esc(settings.apiKey)}" placeholder="nvapi-…">
-          <span class="hint">Saved in this browser's localStorage and sent only to the StudyForge Worker → NVIDIA NIM.</span>
+        <p class="label" style="margin-bottom:8px">Where should StudyForge generate from?</p>
+        <div class="provider-grid" id="provider-grid">
+          ${PROVIDER_ORDER.map((id) => providerCard(id, draft)).join("")}
         </div>
-        <div class="field">
-          <label for="set-model">Model</label>
-          <select id="set-model">${modelOptionsHtml(settings.model)}</select>
-          <div class="row tight" style="margin-top:2px">
-            <button type="button" class="btn small" id="set-model-refresh">Load available models</button>
-            <span class="hint" id="set-model-status">Only ${esc(modelFilterLabel())} models are listed.</span>
+        <div id="provider-panel">${providerPanel(draft)}</div>
+
+        <details class="settings-more">
+          <summary>Documents, OCR and defaults</summary>
+          <div class="field-row">
+            <div class="field"><label for="set-lang">OCR language</label>
+              <select id="set-lang">
+                ${[
+                  ["eng", "English"],
+                  ["jpn", "Japanese"],
+                  ["eng+jpn", "English + Japanese"],
+                  ["chi_sim", "Chinese (Simplified)"],
+                  ["fra", "French"],
+                  ["deu", "German"],
+                  ["spa", "Spanish"],
+                ]
+                  .map(
+                    ([value, label]) =>
+                      `<option value="${value}" ${draft.ocrLanguage === value ? "selected" : ""}>${label}</option>`,
+                  )
+                  .join("")}
+              </select>
+            </div>
+            <div class="field"><label for="set-scale">OCR render quality</label>
+              <select id="set-scale">
+                ${[1, 1.5, 2, 2.5, 3]
+                  .map(
+                    (value) =>
+                      `<option value="${value}" ${Number(draft.ocrScale) === value ? "selected" : ""}>${value}×</option>`,
+                  )
+                  .join("")}
+              </select>
+            </div>
           </div>
-          <input id="set-model-custom" type="text" placeholder="vendor/model-id" hidden>
-          <span class="hint">The list comes from your NVIDIA account through the StudyForge Worker, filtered to the supported model families.</span>
-        </div>
-        <div class="field-row">
-          <div class="field"><label for="set-lang">OCR language</label>
-            <select id="set-lang">
-              ${[
-                ["eng", "English"],
-                ["jpn", "Japanese"],
-                ["eng+jpn", "English + Japanese"],
-                ["chi_sim", "Chinese (Simplified)"],
-                ["fra", "French"],
-                ["deu", "German"],
-                ["spa", "Spanish"],
-              ]
-                .map(
-                  ([value, label]) =>
-                    `<option value="${value}" ${settings.ocrLanguage === value ? "selected" : ""}>${label}</option>`,
-                )
-                .join("")}
-            </select>
-          </div>
-          <div class="field"><label for="set-scale">OCR render quality</label>
-            <select id="set-scale">
-              ${[1, 1.5, 2, 2.5, 3]
+          <div class="field">
+            <label for="set-goal">Weekly study goal</label>
+            <select id="set-goal">
+              ${[2, 3, 4, 5, 6, 7]
                 .map(
                   (value) =>
-                    `<option value="${value}" ${Number(settings.ocrScale) === value ? "selected" : ""}>${value}×</option>`,
+                    `<option value="${value}" ${Number(draft.weeklyGoal) === value ? "selected" : ""}>${value} days a week</option>`,
                 )
                 .join("")}
             </select>
+            <span class="hint">Shown as a week tracker on the dashboard.</span>
           </div>
-        </div>
-        <div class="field">
-          <label for="set-cards">Flashcards</label>
-          <select id="set-cards">
-            <option value="vocab" ${settings.flashcardStyle === "vocab" ? "selected" : ""}>Vocabulary &amp; concepts — term on the front, definition on the back</option>
-            <option value="question" ${settings.flashcardStyle === "question" ? "selected" : ""}>Exam-style questions — question on the front, answer on the back</option>
-          </select>
-          <span class="hint">The default for new decks. You can still pick the other style when generating one.</span>
-        </div>
-        <div class="notice subtle">
-          <strong>Build:</strong> ${esc((globalThis.STUDYFORGE_CONFIG || {}).version || "unknown")}
-          <span class="tiny">— if this is not the build you expect, hard-reload (Ctrl/Cmd-Shift-R).</span><br>
-          <strong>Model:</strong> ${esc(settings.model)}<br>
-          <strong>Storage:</strong> ${(store.storageBytes() / 1024).toFixed(0)} KB used in localStorage.
-          Study guides and quiz results are saved locally; uploaded files and their raw text are never stored.
-        </div>
-        <div class="notice error-soft">
-          <strong>Danger zone</strong>
-          <p class="tiny">Delete every class, study kit, resource, document and question from this browser.</p>
-          <button class="btn small danger-solid" data-clear-all>Delete all data</button>
-        </div>`,
+          <div class="field">
+            <label for="set-cards">Default flashcard style</label>
+            <select id="set-cards">
+              <option value="vocab" ${draft.flashcardStyle === "vocab" ? "selected" : ""}>Vocabulary &amp; concepts — term on the front</option>
+              <option value="question" ${draft.flashcardStyle === "question" ? "selected" : ""}>Exam-style questions — question on the front</option>
+            </select>
+          </div>
+          <div class="notice subtle">
+            <strong>Build:</strong> ${esc((globalThis.STUDYFORGE_CONFIG || {}).version || "unknown")}<br>
+            <strong>Engine:</strong> ${esc(StudyForge.ai.providerLabel())}<br>
+            <strong>Storage:</strong> ${(store.storageBytes() / 1024).toFixed(0)} KB used in this browser.
+            Uploaded files and their raw text are never stored.
+          </div>
+          <div class="notice subtle">
+            <strong>Install &amp; offline</strong>
+            <p class="tiny">StudyForge works offline once it has been opened here. Install it to get an app icon and a full-screen window.</p>
+            <button class="btn small" data-install-app ${installPrompt ? "" : 'hidden title="Use your browser menu → Install app"'}>Install app</button>
+            <span class="tiny muted" id="install-status">${installPrompt ? "Ready to install." : "Not installable here yet — use your browser's Install option."}</span>
+          </div>
+          <div class="notice error-soft">
+            <strong>Danger zone</strong>
+            <p class="tiny">Delete every class, study kit, resource, guide and attempt from this browser.</p>
+            <button class="btn small danger-solid" data-clear-all>Delete all data</button>
+          </div>
+        </details>`,
       onMount: (root) => {
-        const keyInput = root.querySelector("#set-key");
-        const toggle = document.createElement("button");
-        toggle.type = "button";
-        toggle.className = "btn small";
-        toggle.textContent = "Show";
-        toggle.style.marginTop = "6px";
-        toggle.addEventListener("click", () => {
-          const show = keyInput.type === "password";
-          keyInput.type = show ? "text" : "password";
-          toggle.textContent = show ? "Hide" : "Show";
-        });
-        keyInput.insertAdjacentElement("afterend", toggle);
+        const panel = root.querySelector("#provider-panel");
+        const grid = root.querySelector("#provider-grid");
+        const statusEl = () => root.querySelector("#set-provider-status");
 
-        const modelSelect = root.querySelector("#set-model");
-        const refresh = root.querySelector("#set-model-refresh");
-        const statusEl = root.querySelector("#set-model-status");
+        // Keep what has been typed when the panel is re-rendered.
+        const capture = () => {
+          const key = root.querySelector("#set-key");
+          if (key) draft.keys[draft.provider] = key.value.trim();
+          const base = root.querySelector("#set-base");
+          if (base) draft.baseUrl = base.value.trim();
+          const model = readModelField(root);
+          if (model) draft.models[draft.provider] = model;
+        };
 
-        modelSelect.addEventListener("change", () => {
+        const repaintPanel = () => {
+          panel.innerHTML = providerPanel(draft);
           syncCustomInput(root);
-          const input = root.querySelector("#set-model-custom");
-          if (input && modelSelect.value === CUSTOM_MODEL) input.focus();
-        });
-        syncCustomInput(root);
+          wirePanel();
+        };
 
-        refresh.addEventListener("click", () => loadModelCatalogue(root, { key: keyInput.value, statusEl, button: refresh }));
+        const wirePanel = () => {
+          const key = root.querySelector("#set-key");
+          if (key) {
+            const toggle = document.createElement("button");
+            toggle.type = "button";
+            toggle.className = "btn small";
+            toggle.textContent = "Show";
+            toggle.style.marginTop = "6px";
+            toggle.addEventListener("click", () => {
+              const show = key.type === "password";
+              key.type = show ? "text" : "password";
+              toggle.textContent = show ? "Hide" : "Show";
+            });
+            key.insertAdjacentElement("afterend", toggle);
+            key.addEventListener("input", () => {
+              draft.keys[draft.provider] = key.value.trim();
+            });
+          }
+          const base = root.querySelector("#set-base");
+          if (base) base.addEventListener("input", () => (draft.baseUrl = base.value.trim()));
 
-        // Load the catalogue straight away when a key is already available.
-        if (keyInput.value.trim()) {
-          loadModelCatalogue(root, { key: keyInput.value, statusEl, button: refresh });
-        }
+          const modelSelect = root.querySelector("#set-model");
+          if (modelSelect) {
+            modelSelect.addEventListener("change", () => {
+              syncCustomInput(root);
+              const input = root.querySelector("#set-model-custom");
+              if (input && modelSelect.value === CUSTOM_MODEL) input.focus();
+              else draft.models[draft.provider] = modelSelect.value;
+            });
+            syncCustomInput(root);
+          }
+
+          const refresh = root.querySelector("#set-models-refresh");
+          if (refresh) refresh.addEventListener("click", () => loadModels(root, draft, { statusEl, button: refresh }));
+          const test = root.querySelector("#set-test");
+          if (test) test.addEventListener("click", () => testConnection(root, draft, { statusEl, button: test }));
+        };
+
+        const wireGrid = () => {
+          grid.querySelectorAll("[data-provider]").forEach((button) => {
+            button.addEventListener("click", () => {
+              if (draft.provider === button.dataset.provider) return;
+              capture();
+              draft.provider = button.dataset.provider;
+              grid.innerHTML = PROVIDER_ORDER.map((id) => providerCard(id, draft)).join("");
+              repaintPanel();
+              wireGrid();
+            });
+          });
+        };
+
+        wirePanel();
+        wireGrid();
 
         root.querySelector("[data-clear-all]").addEventListener("click", () => {
           closeModal();
           openModal({
             title: "Delete all data?",
-            body: `<p>This removes every class, kit, resource, generated document and question from this browser. Export a backup first if you need one.</p>`,
+            body: `<p>This removes every class, kit, resource, guide, saved attempt and setting stored in this browser. Export a backup first if you need one.</p>`,
             confirmLabel: "Delete everything",
             danger: true,
             onConfirm: () => {
@@ -1945,32 +4215,140 @@
               docViewId = null;
               location.hash = "#/";
               store.load();
+              renderProviderBadge();
               toast("All local data deleted.", "success");
             },
           });
         });
       },
       onConfirm: (root) => {
+        const info = StudyForge.ai.providers()[draft.provider];
+        const key = root.querySelector("#set-key");
+        if (key) draft.keys[draft.provider] = key.value.trim();
+        const base = root.querySelector("#set-base");
+        if (base) draft.baseUrl = base.value.trim();
         const model = readModelField(root);
-        if (!model) {
-          const input = root.querySelector("#set-model-custom");
-          if (input) {
-            input.hidden = false;
-            input.focus();
-          }
-          toast("Enter a model id, or pick one from the list.", "error");
+        if (model) draft.models[draft.provider] = model;
+
+        if (info.kind !== "local" && info.needsKey && !draft.keys[draft.provider]) {
+          toast(`Paste your ${info.keyLabel} to use ${info.label}.`, "error");
           return false;
         }
+        if (draft.provider === "custom" && !draft.baseUrl) {
+          toast("Add the endpoint base URL for your custom provider.", "error");
+          return false;
+        }
+
         store.setSettings({
-          apiKey: root.querySelector("#set-key").value,
-          model,
+          provider: draft.provider,
+          providerKeys: draft.keys,
+          baseUrl: draft.baseUrl,
+          apiKey: draft.keys[draft.provider] || "",
+          model: draft.models[draft.provider] || StudyForge.ai.providers()[draft.provider].model || store.getSettings().model,
+          modelByProvider: draft.models,
           ocrLanguage: root.querySelector("#set-lang").value,
           ocrScale: Number(root.querySelector("#set-scale").value),
           flashcardStyle: root.querySelector("#set-cards").value,
+          weeklyGoal: Number(root.querySelector("#set-goal").value),
         });
-        toast("Settings saved.", "success");
+        renderProviderBadge();
+        toast(
+          draft.provider === "local" ? "Using the on-device engine." : `${info.label} connected.`,
+          "success",
+        );
       },
     });
+  }
+
+  /** Rebuild the model <select> after loading a catalogue. */
+  function fillModelChoices(root, draft) {
+    const select = root.querySelector("#set-model");
+    if (!select) return;
+    const current = draft.models[draft.provider] || StudyForge.ai.providers()[draft.provider].model || "";
+    const choices = modelChoices(draft);
+    select.innerHTML =
+      choices
+        .map(
+          (id) =>
+            `<option value="${esc(id)}" ${id === current ? "selected" : ""}>${esc(id)}${
+              id === StudyForge.ai.providers()[draft.provider].model ? " (recommended)" : ""
+            }</option>`,
+        )
+        .join("") +
+      `<option value="${CUSTOM_MODEL}" ${choices.includes(current) ? "" : "selected"}>Custom model id…</option>`;
+    syncCustomInput(root);
+  }
+
+  function syncCustomInput(root) {
+    const select = root.querySelector("#set-model");
+    const input = root.querySelector("#set-model-custom");
+    if (!select || !input) return;
+    input.hidden = select.value !== CUSTOM_MODEL;
+  }
+
+  function readModelField(root) {
+    const select = root.querySelector("#set-model");
+    const input = root.querySelector("#set-model-custom");
+    if (!select) return "";
+    if (select.value === CUSTOM_MODEL) return input ? input.value.trim() : "";
+    return select.value;
+  }
+
+  async function loadModels(root, draft, { statusEl, button }) {
+    const info = StudyForge.ai.providers()[draft.provider];
+    if (button) button.disabled = true;
+    const status = statusEl();
+    if (status) status.textContent = `Loading models from ${info.label}…`;
+    try {
+      const { models } = await StudyForge.ai.listModels({
+        apiKey: draft.keys[draft.provider],
+        baseUrl: draft.baseUrl,
+      });
+      draft.catalogue[draft.provider] = models.map((model) => model.id);
+      fillModelChoices(root, draft);
+      if (status) {
+        status.textContent = models.length
+          ? `${models.length} model(s) available.`
+          : "No models were returned — type a model id instead.";
+      }
+    } catch (error) {
+      if (status) status.textContent = StudyForge.ai.describeError(error);
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  async function testConnection(root, draft, { statusEl, button }) {
+    const info = StudyForge.ai.providers()[draft.provider];
+    const status = statusEl();
+    if (!info || info.kind === "local") {
+      if (status) status.textContent = "The on-device engine needs no connection.";
+      return;
+    }
+    const key = draft.keys[draft.provider];
+    if (info.needsKey && !key) {
+      if (status) status.textContent = "Add a key first.";
+      return;
+    }
+    if (button) button.disabled = true;
+    if (status) status.textContent = `Asking ${info.label} for a quick reply…`;
+    try {
+      const { content } = await StudyForge.ai.chat({
+        apiKey: key,
+        baseUrl: draft.baseUrl,
+        model: draft.models[draft.provider] || "",
+        prompt: "Reply with exactly: OK",
+        maxTokens: 16,
+        temperature: 0,
+      });
+      if (status) status.textContent = `Connected ✓ (${content.slice(0, 40)})`;
+      toast(`${info.label} is working.`, "success");
+    } catch (error) {
+      if (status) status.textContent = StudyForge.ai.describeError(error);
+      toast(StudyForge.ai.describeError(error), "error");
+    } finally {
+      if (button) button.disabled = false;
+    }
   }
 
   /* ------------------------------------------------------------------ *
@@ -1985,6 +4363,9 @@
     const next = Math.min(order.length - 1, Math.max(0, flashState.index + step));
     flashState.index = next;
     flashState.flipped = false;
+    flashState.typed = "";
+    flashState.typedVerdict = null;
+    flashState.finished = false;
     render();
   }
 
@@ -1994,6 +4375,11 @@
     const order = deckOrder(kit);
     if (!order.length) return;
     const cardIndex = order[flashState.index];
+    const card = kit.flashcards.items[cardIndex];
+    if (card) {
+      const rating = store.rateCard(kit.id, cardKey(card), kind === "known" ? "known" : "again");
+      if (rating) flashState.lastScheduled = { front: card.front, dueAt: rating.dueAt };
+    }
     if (kind === "known") {
       flashState.known[cardIndex] = true;
       delete flashState.again[cardIndex];
@@ -2001,14 +4387,16 @@
       flashState.again[cardIndex] = true;
       delete flashState.known[cardIndex];
     }
+    flashState.typed = "";
+    flashState.typedVerdict = null;
     if (flashState.index < order.length - 1) {
       flashState.index += 1;
       flashState.flipped = false;
       render();
     } else {
       flashState.flipped = false;
+      flashState.finished = true;
       render();
-      toast("Last card in the deck.", "info");
     }
   }
 
@@ -2023,7 +4411,14 @@
     flashState.order = order;
     flashState.index = 0;
     flashState.flipped = false;
+    flashState.finished = false;
+    flashState.typed = "";
+    flashState.typedVerdict = null;
     flashState.shuffled = true;
+    flashState.reviewMode = false;
+    flashState.dueOnly = false;
+    flashState.hardMode = false;
+    flashState.hardList = null;
     render();
     toast("Deck shuffled.", "success");
   }
@@ -2037,6 +4432,16 @@
       lines.push(`**${index + 1}. ${card.front}**`, "", card.back, "");
     });
     return lines.join("\n");
+  }
+
+  /** CSV for Anki / Quizlet import. Quoted properly, and with a BOM for Excel. */
+  function flashcardsToCsv(kit) {
+    const cell = (value) => `"${String(value == null ? "" : value).replace(/"/g, '""').replace(/\r?\n/g, " ")}"`;
+    const rows = [["Front", "Back"].map(cell).join(",")];
+    (kit.flashcards.items || []).forEach((card) => {
+      rows.push([cell(card.front), cell(card.back)].join(","));
+    });
+    return `\uFEFF${rows.join("\r\n")}\r\n`;
   }
 
   /**
@@ -2066,6 +4471,7 @@
       toast("Generate a quiz first.", "error");
       return;
     }
+    clearQuizDraft();
     quizState = {
       kitId: kit.id,
       status: "running",
@@ -2074,7 +4480,10 @@
       answers: {},
       results: {},
       startedAt: Date.now(),
+      questionStartedAt: Date.now(),
       attempt: null,
+      items: null,
+      retry: false,
     };
     render();
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -2102,7 +4511,7 @@
     if (quizState.status !== "running" || quizState.phase === "marking") return;
     const kit = store.getKit(quizState.kitId);
     if (!kit || !kit.quiz) return;
-    const items = kit.quiz.items;
+    const items = activeQuizItems(kit);
     const index = Math.min(quizState.index, items.length - 1);
     const item = items[index];
 
@@ -2112,6 +4521,8 @@
       } else {
         quizState.index = index + 1;
         quizState.phase = "answering";
+        quizState.questionStartedAt = Date.now();
+        saveQuizDraft();
         render();
         window.scrollTo({ top: 0, behavior: "smooth" });
       }
@@ -2150,15 +4561,22 @@
 
     // The user may have left the quiz while the AI was marking.
     if (quizState.kitId !== kit.id || quizState.status !== "running") return;
+    // At least a second: instant answers are still a data point for pace.
+    result.seconds = Math.max(
+      1,
+      Math.min(3600, Math.round((Date.now() - (quizState.questionStartedAt || Date.now())) / 1000)),
+    );
     quizState.results[index] = result;
     quizState.phase = "marked";
+    saveQuizDraft();
     render();
   }
 
   function finishQuiz() {
     const kit = store.getKit(quizState.kitId);
     if (!kit || !kit.quiz) return;
-    const items = kit.quiz.items;
+    const items = activeQuizItems(kit);
+    quizState.attemptItems = items;
     const answers = items.map((item, index) => {
       const result = quizState.results[index] || {};
       const given = quizState.answers[index] || {};
@@ -2176,6 +4594,7 @@
         score: Number.isFinite(result.score) ? result.score : 0,
         feedback: result.feedback || "",
         markedBy: result.markedBy || "auto",
+        seconds: Number.isFinite(result.seconds) ? result.seconds : 0,
       };
     });
     const correct = answers.filter((entry) => entry.correct).length;
@@ -2189,6 +4608,7 @@
     };
 
     store.addKitQuizAttempt(kit.id, attempt);
+    clearQuizDraft();
     quizState.status = "finished";
     quizState.phase = "marked";
     quizState.attempt = attempt;
@@ -2218,12 +4638,14 @@
       secondsUsed: 0,
       result: null,
     };
+    saveExamDraft();
     render();
     toast(`Exam started — ${kit.exam.durationMinutes} minutes on the clock.`);
   }
 
   function submitExam(reason = "manual") {
     if (examState.status !== "running") return;
+    clearExamDraft();
     const kit = store.getKit(examState.kitId);
     if (!kit || !kit.exam) {
       resetExam(examState.kitId);
@@ -2249,6 +4671,12 @@
       total: items.length,
       takenAt: new Date().toISOString(),
       secondsUsed,
+      answers: items.map((item, index) => ({
+        question: item.question,
+        given: item.options[examState.answers[index]] || "",
+        expected: item.options[item.answerIndex] || item.answer,
+        correct: examState.answers[index] === item.answerIndex,
+      })),
     });
 
     render();
@@ -2414,6 +4842,7 @@
         const count = Number(root.querySelector("#quiz-count").value);
         const difficulty = root.querySelector("#quiz-level").value;
         resetQuiz(kit.id);
+        clearQuizDraft();
         jobs.makeQuiz(kit, count, difficulty);
         toast("Generating quiz questions…");
       },
@@ -2460,14 +4889,50 @@
     toast("Pasted text queued for processing.");
   }
 
+  /**
+   * With the on-device engine, a fresh study document is enough to build the
+   * rest of the kit: cards and a quiz appear without another click. Never does
+   * this with an AI provider — that would spend someone's quota unasked.
+   */
+  function autoForgeAfterDocument(current, previous) {
+    if (!previous || current === previous) return;
+    const finished = jobs.getLast();
+    if (!finished || finished.status !== "done" || finished.autoForged) return;
+    if (finished.kind !== "text" && finished.kind !== "pdf") return;
+    if (StudyForge.ai.providerId() !== "local") return;
+    if (!finished.kitId) return;
+    const kit = store.getKit(finished.kitId);
+    if (!kit) return;
+    const documents = store.resourcesInKit(kit.id).filter((resource) => resource.document);
+    if (!documents.length) return;
+    finished.autoForged = true;
+    if (!kit.flashcards) {
+      jobs.makeFlashcards(kit, 20, store.getSettings().flashcardStyle || "vocab");
+    }
+    if (!kit.quiz) {
+      jobs.makeQuiz(kit, 10, "");
+    }
+  }
+
   function download(filename, content, type = "text/plain;charset=utf-8") {
-    const blob = new Blob([content], { type });
-    const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
-    anchor.href = url;
     anchor.download = filename;
+    let url = "";
+    try {
+      url = URL.createObjectURL(new Blob([content], { type }));
+      anchor.href = url;
+    } catch (error) {
+      // Very old browsers, or a locked-down webview: fall back to a data URL.
+      try {
+        anchor.href = `data:${type};base64,${btoa(unescape(encodeURIComponent(content)))}`;
+      } catch (inner) {
+        toast("This browser blocked the download.", "error");
+        return false;
+      }
+    }
     anchor.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    if (url) setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return true;
   }
 
   function safeFileName(name, extension) {
@@ -2482,6 +4947,194 @@
     } catch (error) {
       toast("Clipboard was blocked by the browser.", "error");
     }
+  }
+
+  /**
+   * Print a clean sheet (deck, paper, answer key) instead of whatever is on
+   * screen. The sheet lives outside the app shell so print styles can show it
+   * alone, and it is removed again afterwards.
+   */
+  function printSheet(title, html) {
+    if (typeof window.print !== "function") {
+      toast("This browser cannot print.", "error");
+      return;
+    }
+    const existing = document.getElementById("print-sheet");
+    if (existing) existing.remove();
+    const sheet = document.createElement("div");
+    sheet.id = "print-sheet";
+    sheet.innerHTML = `<h1>${esc(title)}</h1>${html}`;
+    document.body.appendChild(sheet);
+    document.body.classList.add("print-sheet");
+    const cleanup = () => {
+      const node = document.getElementById("print-sheet");
+      if (node) node.remove();
+      document.body.classList.remove("print-sheet");
+      window.removeEventListener("afterprint", cleanup);
+    };
+    window.addEventListener("afterprint", cleanup);
+    setTimeout(() => {
+      window.print();
+      setTimeout(cleanup, 1500);
+    }, 40);
+  }
+
+  /**
+   * Turn pasted text into cards. One card per line, prompt and answer split on
+   * the first `|`, tab, `=` or padded hyphen so common formats just work.
+   */
+  function parseCardLines(raw) {
+    const cards = [];
+    String(raw || "")
+      .split(/\r?\n/)
+      .forEach((line) => {
+        const text = line.trim();
+        if (!text) return;
+        const match = text.match(/^(.*?)\s*(?:\||\t|=|\s-\s|–|—)\s*(.+)$/);
+        if (!match) return;
+        const front = match[1].trim().replace(/^[-*\d.\s]+/, "").trim();
+        const back = match[2].trim();
+        if (front && back) cards.push({ front, back });
+      });
+    return cards;
+  }
+
+  function printDeck(kit) {
+    const cards = (kit.flashcards && kit.flashcards.items) || [];
+    if (!cards.length) return;
+    const rows = cards
+      .map(
+        (card, index) =>
+          `<tr><td class="num">${index + 1}</td><td class="front">${esc(card.front)}</td><td class="back">${esc(
+            card.back,
+          )}</td></tr>`,
+      )
+      .join("");
+    printSheet(
+      `${kit.name} — flashcards`,
+      `<p class="sheet-note">${cards.length} cards. Fold or cover the right column to test yourself.</p>
+       <table class="sheet-table"><thead><tr><th>#</th><th>Prompt</th><th>Answer</th></tr></thead><tbody>${rows}</tbody></table>`,
+    );
+  }
+
+  /** A printable paper from a list of multiple-choice items (quiz or exam). */
+  function printChoicePaper(title, items, note) {
+    const questions = items
+      .map(
+        (item, index) => `
+          <div class="sheet-q">
+            <p><strong>${index + 1}.</strong> ${esc(item.question)}</p>
+            <ol class="sheet-options" type="A">${item.options.map((option) => `<li>${esc(option)}</li>`).join("")}</ol>
+          </div>`,
+      )
+      .join("");
+    const key = items
+      .map(
+        (item, index) =>
+          `<li><strong>${index + 1}.</strong> ${String.fromCharCode(65 + item.answerIndex)} — ${esc(
+            item.options[item.answerIndex],
+          )}</li>`,
+      )
+      .join("");
+    printSheet(`${title}`, `${note ? `<p class="sheet-note">${esc(note)}</p>` : ""}${questions}
+      <h2 class="sheet-page-break">Answer key</h2><ol class="sheet-key">${key}</ol>`);
+  }
+
+  function printExam(kit) {
+    const exam = kit.exam;
+    if (!exam || !exam.items.length) return;
+    printChoicePaper(
+      `${kit.name} — practice test`,
+      exam.items,
+      `${exam.items.length} questions · ${exam.durationMinutes} minutes. Sit it with a timer, then mark with the key.`,
+    );
+  }
+
+  function printQuiz(kit) {
+    const items = (kit.quiz && kit.quiz.items) || [];
+    if (!items.length) return;
+    const questions = items
+      .map(
+        (item, index) => `
+          <div class="sheet-q">
+            <p><strong>${index + 1}.</strong> ${esc(item.question)}</p>
+            ${
+              item.type === "mcq"
+                ? `<ol class="sheet-options" type="A">${item.options.map((option) => `<li>${esc(option)}</li>`).join("")}</ol>`
+                : `<div class="sheet-lines"></div>`
+            }
+          </div>`,
+      )
+      .join("");
+    const key = items
+      .map(
+        (item, index) =>
+          `<li><strong>${index + 1}.</strong> ${
+            item.type === "mcq"
+              ? `${String.fromCharCode(65 + item.answerIndex)} — ${esc(item.options[item.answerIndex])}`
+              : esc(item.answer)
+          }</li>`,
+      )
+      .join("");
+    printSheet(
+      `${kit.name} — quiz`,
+      `${questions}<h2 class="sheet-page-break">Answer key</h2><ol class="sheet-key">${key}</ol>`,
+    );
+  }
+
+  /** A plain report of every attempt, for keeping notes outside the app. */
+  function resultsToMarkdown(kit) {
+    const attempts = (kit.quiz && kit.quiz.attempts) || [];
+    const stats = quizAnalytics(kit);
+    const lines = [`# ${kit.name} — quiz results`, ""];
+    if (stats) {
+      lines.push(
+        `- Attempts: ${stats.count}`,
+        `- Best: ${stats.best}%`,
+        `- Average: ${stats.average}%`,
+        `- Multiple choice: ${stats.byType.mcq.correct}/${stats.byType.mcq.total}`,
+        `- Short answer: ${stats.byType.short.correct}/${stats.byType.short.total}`,
+        "",
+      );
+    }
+    attempts.forEach((attempt, index) => {
+      lines.push(
+        `## Attempt ${attempts.length - index} — ${attempt.percent}%`,
+        `${attempt.correct}/${attempt.total} correct · ${new Date(attempt.takenAt).toLocaleString()}${
+          attempt.secondsUsed ? ` · ${formatClock(attempt.secondsUsed)}` : ""
+        }`,
+        "",
+      );
+      for (const answer of attempt.answers) {
+        lines.push(
+          `- ${answer.correct ? "✓" : "✗"} ${answer.question}${answer.seconds ? ` (${answer.seconds}s)` : ""}`,
+          `  - Your answer: ${answer.given || "—"}`,
+        );
+        if (!answer.correct) lines.push(`  - Model answer: ${answer.expected}`);
+      }
+      lines.push("");
+    });
+    lines.push("Generated by StudyForge.");
+    return lines.join("\n");
+  }
+
+  /** The paper with a separate answer key, so it can be printed and sat on paper. */
+  function examToMarkdown(kit) {
+    const exam = kit.exam;
+    const lines = [`# ${kit.name} — practice test`, "", `${exam.items.length} questions · ${exam.durationMinutes} minutes`, ""];
+    exam.items.forEach((item, index) => {
+      lines.push(`${index + 1}. ${item.question}`);
+      item.options.forEach((option, optionIndex) => {
+        lines.push(`   ${String.fromCharCode(65 + optionIndex)}. ${option}`);
+      });
+      lines.push("");
+    });
+    lines.push("---", "", "## Answer key", "");
+    exam.items.forEach((item, index) => {
+      lines.push(`${index + 1}. ${String.fromCharCode(65 + item.answerIndex)} — ${item.options[item.answerIndex]}`);
+    });
+    lines.push("", "Generated by StudyForge.");
+    return lines.join("\n");
   }
 
   function quizToMarkdown(kit) {
@@ -2542,16 +5195,32 @@
       case "new-kit":
         openNewKit();
         break;
+      case "open-settings":
+        openSettings();
+        break;
+      case "load-demo": {
+        const demo = createDemoKit();
+        if (demo) {
+          toast("Sample kit ready — open the Quiz or Flashcards tab.", "success");
+          navigate(`#/kit/${demo.kit.id}`);
+        }
+        break;
+      }
+      case "open-activity":
+        navigate("#/activity");
+        break;
       case "open-kit":
         navigate(`#/kit/${id}`);
         break;
       case "export-backup":
+        store.setSettings({ lastBackupAt: new Date().toISOString() });
         download(
           `studyforge-backup-${new Date().toISOString().slice(0, 10)}.json`,
           store.exportData(),
           "application/json",
         );
         toast("Backup exported.", "success");
+        render();
         break;
       case "import-backup":
         $("import-file").click();
@@ -2565,6 +5234,30 @@
       case "move-kit":
         openMoveKit(id);
         break;
+      case "set-exam-date": {
+        const kit = store.getKit(id);
+        if (!kit) break;
+        const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+        openModal({
+          title: "Exam date",
+          confirmLabel: "Save date",
+          body: `
+            <div class="field">
+              <label for="exam-date">When is the exam?</label>
+              <input id="exam-date" type="date" value="${esc(kit.examDate || tomorrow)}">
+              <span class="hint">Optional. StudyForge counts down and works out how many cards a day
+                gets you through the deck twice before then.</span>
+            </div>
+            ${kit.examDate ? `<p class="muted tiny">Clear the field to remove the date.</p>` : ""}`,
+          onConfirm: (root) => {
+            const value = root.querySelector("#exam-date").value;
+            store.updateKit(kit.id, { examDate: value || "" });
+            render();
+            toast(value ? "Exam date saved." : "Exam date removed.");
+          },
+        });
+        break;
+      }
       case "edit-kit":
         openEditKit(id);
         break;
@@ -2580,9 +5273,8 @@
           confirmLabel: "Delete kit",
           danger: true,
           onConfirm: () => {
-            store.deleteKit(id);
+            undoableDelete(() => store.deleteKit(id), "Study kit deleted.");
             if (route.name === "kit" && route.id === id) navigate("#/");
-            toast("Study kit deleted.", "success");
           },
         });
         break;
@@ -2596,9 +5288,8 @@
           confirmLabel: "Delete class",
           danger: true,
           onConfirm: () => {
-            store.deleteClass(id);
+            undoableDelete(() => store.deleteClass(id), "Class deleted.");
             if (filterClassId === id) filterClassId = null;
-            toast("Class deleted.", "success");
           },
         });
         break;
@@ -2653,11 +5344,83 @@
       case "save-doc": {
         const textarea = els.view.querySelector(`[data-doc-id="${id}"]`);
         if (!textarea) break;
+        const resource = store.getResource(id);
+        const kitId = resource && resource.kitId;
+        // Keep the original so a stray save can be undone.
+        const previous = resource && resource.document ? resource.document : "";
         store.setResourceDocument(id, textarea.value);
         editingDocId = null;
-        toast("Document saved.", "success");
+        toast("Document saved.", "success", {
+          label: "Undo",
+          onClick: () => {
+            store.setResourceDocument(id, previous);
+            render();
+            toast("Guide restored.", "info");
+          },
+        });
+        if (kitId) offerRegenerate(kitId);
         break;
       }
+      case "save-notes": {
+        saveKitNotes(id);
+        break;
+      }
+      case "clear-search": {
+        query = "";
+        if (els.search) els.search.value = "";
+        render();
+        break;
+      }
+      case "install-app": {
+        if (!installPrompt) {
+          toast("Use your browser menu → Install app.", "info");
+          break;
+        }
+        const prompt = installPrompt;
+        installPrompt = null;
+        prompt.prompt();
+        Promise.resolve(prompt.userChoice).then((choice) =>
+          toast(
+            choice && choice.outcome === "accepted" ? "StudyForge installed." : "Install dismissed.",
+            "info",
+          ),
+        );
+        break;
+      }
+      case "listen-doc": {
+        const resource = store.getResource(id);
+        if (!resource || !resource.document) break;
+        if (speechState.speaking) {
+          stopSpeech();
+          break;
+        }
+        startSpeech(resource);
+        break;
+      }
+      case "doc-bigger":
+        setDocSize(readDocSize() + 0.1);
+        break;
+      case "doc-smaller":
+        setDocSize(readDocSize() - 0.1);
+        break;
+      case "doc-focus": {
+        document.body.classList.toggle("doc-focus");
+        if (document.body.classList.contains("doc-focus")) {
+          toast("Focus mode — press Esc to bring the app back.", "info");
+        }
+        break;
+      }
+      case "print-doc": {
+        els.view.classList.add("printing");
+        setTimeout(() => {
+          window.print();
+          els.view.classList.remove("printing");
+        }, 60);
+        break;
+      }
+      case "show-shortcuts":
+        openShortcuts();
+        break;
       case "copy-doc": {
         const resource = store.getResource(id);
         if (resource) copyText(resource.document, "Document copied");
@@ -2689,6 +5452,14 @@
         }
         break;
       }
+      case "download-flashcards-csv": {
+        const kit = store.getKit(id);
+        if (kit && kit.flashcards) {
+          download(safeFileName(kit.name + " cards", "csv"), flashcardsToCsv(kit), "text/csv;charset=utf-8");
+          toast("CSV exported — import it into Anki or Quizlet.", "success");
+        }
+        break;
+      }
       case "flip-card":
         flipCard();
         break;
@@ -2704,6 +5475,303 @@
       case "card-again":
         markCard("again");
         break;
+      case "add-card": {
+        const kit = store.getKit(route.id);
+        if (!kit) break;
+        openModal({
+          title: "Add a card",
+          confirmLabel: "Add card",
+          body: `
+            <div class="field"><label for="new-front">Prompt</label>
+              <input id="new-front" type="text" placeholder="What should you be asked?"></div>
+            <div class="field"><label for="new-back">Answer</label>
+              <textarea id="new-back" rows="4" placeholder="What should you remember?"></textarea></div>
+            <p class="hint">Handy for the one fact your teacher keeps repeating.</p>`,
+          onConfirm: (root) => {
+            const front = root.querySelector("#new-front").value.trim();
+            const back = root.querySelector("#new-back").value.trim();
+            if (!front || !back) {
+              toast("A card needs both a prompt and an answer.", "error");
+              return false;
+            }
+            const current = kit.flashcards || { items: [] };
+            store.setKitFlashcards(kit.id, { ...current, items: [...(current.items || []), { front, back }] });
+            toast("Card added.", "success");
+          },
+        });
+        break;
+      }
+      case "import-cards": {
+        const kit = store.getKit(route.id);
+        if (!kit) break;
+        openModal({
+          title: "Paste cards",
+          confirmLabel: "Add cards",
+          body: `
+            <div class="field">
+              <label for="paste-cards">One card per line</label>
+              <textarea id="paste-cards" rows="8"
+                placeholder="Osmosis | Water moving across a membrane\nMitochondria - Where respiration happens"></textarea>
+              <span class="hint">Separate the prompt from the answer with <code>|</code>, a tab, <code>=</code> or <code> - </code>.
+                Everything after that becomes the answer.</span>
+            </div>
+            <div class="field">
+              <label class="check"><input type="checkbox" id="paste-replace"> Replace the cards already in this deck</label>
+            </div>`,
+          onConfirm: (root) => {
+            const raw = root.querySelector("#paste-cards").value;
+            const replace = root.querySelector("#paste-replace").checked;
+            const parsed = parseCardLines(raw);
+            if (!parsed.length) {
+              toast("No cards found — put one prompt and answer on each line.", "error");
+              return false;
+            }
+            const current = kit.flashcards || { items: [] };
+            const items = replace ? parsed : [...(current.items || []), ...parsed];
+            store.setKitFlashcards(kit.id, { ...current, items });
+            toast(`${parsed.length} card${parsed.length === 1 ? "" : "s"} added.`, "success");
+          },
+        });
+        break;
+      }
+      case "edit-card": {
+        const kit = store.getKit(route.id);
+        if (!kit || !kit.flashcards) break;
+        const order = deckOrder(kit);
+        const index = order[Math.min(flashState.index, order.length - 1)];
+        const card = kit.flashcards.items[index];
+        if (!card) break;
+        openModal({
+          title: "Edit this card",
+          confirmLabel: "Save card",
+          body: `
+            <div class="field"><label for="edit-front">Prompt</label>
+              <input id="edit-front" type="text" value="${esc(card.front)}"></div>
+            <div class="field"><label for="edit-back">Answer</label>
+              <textarea id="edit-back" rows="4">${esc(card.back)}</textarea></div>
+            <p class="hint">Fixing a card keeps your review progress for it.</p>`,
+          onConfirm: (root) => {
+            const front = root.querySelector("#edit-front").value.trim();
+            const back = root.querySelector("#edit-back").value.trim();
+            if (!front || !back) {
+              toast("A card needs both a prompt and an answer.", "error");
+              return false;
+            }
+            const items = kit.flashcards.items.map((item, itemIndex) =>
+              itemIndex === index ? { ...item, front, back } : item,
+            );
+            // Ratings are keyed by the prompt, so carry the schedule across when
+            // the prompt itself is corrected.
+            const ratings = { ...(kit.flashcards.ratings || {}) };
+            const oldKey = cardKey(card);
+            const newKey = cardKey({ front });
+            if (oldKey !== newKey && ratings[oldKey]) {
+              ratings[newKey] = ratings[oldKey];
+              delete ratings[oldKey];
+            }
+            store.setKitFlashcards(kit.id, { ...kit.flashcards, items, ratings });
+            toast("Card updated.", "success");
+          },
+        });
+        break;
+      }
+      case "reset-progress": {
+        const kit = store.getKit(route.id);
+        if (!kit) break;
+        openModal({
+          title: "Reset card progress?",
+          body: `<p>This clears which cards you marked “Got it” or “Still learning”. The deck itself stays.</p>`,
+          confirmLabel: "Reset progress",
+          danger: true,
+          onConfirm: () => {
+            store.resetCardRatings(kit.id);
+            resetDeck(kit.id);
+            render();
+            toast("Card progress reset.", "success");
+          },
+        });
+        break;
+      }
+      case "study-now": {
+        const kit = id ? store.getKit(id) : null;
+        if (!kit) break;
+        const due = kit.flashcards ? dueAcrossKits({ kits: [kit] }) : { total: 0 };
+        if (due.total) {
+          pendingDueReview = kit.id;
+          window.location.hash = `#/kit/${kit.id}/flashcards`;
+          break;
+        }
+        if (kit.quiz) {
+          window.location.hash = `#/kit/${kit.id}/questions`;
+          break;
+        }
+        window.location.hash = `#/kit/${kit.id}`;
+        toast("Add a resource first — then everything else follows.", "info");
+        break;
+      }
+      case "review-mixed": {
+        startMixedReview();
+        break;
+      }
+      case "mixed-reveal": {
+        if (!mixedReview) break;
+        mixedReview.revealed = true;
+        render();
+        break;
+      }
+      case "mixed-known":
+      case "mixed-again": {
+        if (!mixedReview) break;
+        const step = mixedReview.order[mixedReview.index];
+        const kit = store.getKit(step.kitId);
+        const card = kit && kit.flashcards && kit.flashcards.items[step.cardIndex];
+        if (kit && card) {
+          store.rateCard(kit.id, cardKey(card), action === "mixed-known" ? "known" : "again");
+        }
+        mixedReview.index += 1;
+        mixedReview.revealed = false;
+        if (mixedReview.index >= mixedReview.order.length) {
+          mixedReview = null;
+          render();
+          toast("Catch-up review finished — everything you marked is rescheduled.", "success");
+          break;
+        }
+        // Follow the session across kits.
+        const next = mixedReview.order[mixedReview.index];
+        const nextHash = `#/kit/${next.kitId}/flashcards`;
+        if (window.location.hash !== nextHash) {
+          window.location.hash = nextHash;
+          break;
+        }
+        render();
+        break;
+      }
+      case "mixed-stop": {
+        mixedReview = null;
+        render();
+        toast("Catch-up review ended.");
+        break;
+      }
+      case "review-all-due": {
+        const kitId = id;
+        if (!kitId) break;
+        pendingDueReview = kitId;
+        window.location.hash = `#/kit/${kitId}/flashcards`;
+        if (route.name === "kit" && route.id === kitId && route.tab === "flashcards") {
+          // Same hash: the listener will not fire, so render directly.
+          pendingDueReview = null;
+          flashState.reviewMode = true;
+          flashState.dueOnly = true;
+          flashState.index = 0;
+          flashState.flipped = false;
+          render();
+        }
+        break;
+      }
+      case "review-hardest": {
+        const kit = store.getKit(route.id);
+        flashState.unseenMode = false;
+        const hardest = kit ? hardestCards(kit) : [];
+        if (!hardest.length) {
+          toast("No tricky cards yet — rate a few first.", "info");
+          break;
+        }
+        flashState.reviewMode = false;
+        flashState.dueOnly = false;
+        flashState.hardMode = true;
+        flashState.hardList = hardest;
+        flashState.index = 0;
+        flashState.flipped = false;
+        flashState.showList = false;
+        render();
+        toast(`Practising your ${plural(hardest.length, "trickiest card")}.`, "info");
+        break;
+      }
+      case "review-unseen": {
+        flashState.reviewMode = false;
+        flashState.dueOnly = false;
+        flashState.unseenMode = true;
+        flashState.index = 0;
+        flashState.flipped = false;
+        flashState.finished = false;
+        flashState.showList = false;
+        render();
+        toast("Only cards you have not rated yet.");
+        break;
+      }
+      case "review-due": {
+        flashState.unseenMode = false;
+        flashState.reviewMode = true;
+        flashState.index = 0;
+        flashState.flipped = false;
+        flashState.showList = false;
+        flashState.dueOnly = true;
+        render();
+        toast("Reviewing the cards that are due.");
+        break;
+      }
+      case "review-again": {
+        flashState.unseenMode = false;
+        flashState.reviewMode = true;
+        flashState.index = 0;
+        flashState.flipped = false;
+        flashState.finished = false;
+        flashState.typed = "";
+        flashState.typedVerdict = null;
+        flashState.showList = false;
+        render();
+        toast("Reviewing the cards you are still learning.");
+        break;
+      }
+      case "toggle-typing": {
+        flashState.typing = !flashState.typing;
+        flashState.finished = false;
+        flashState.typed = "";
+        flashState.typedVerdict = null;
+        flashState.flipped = false;
+        render();
+        toast(flashState.typing ? "Type the answer, then check it." : "Back to flipping cards.");
+        break;
+      }
+      case "card-check-typed": {
+        const kit = store.getKit(route.id);
+        const field = els.view.querySelector("[data-card-typed]");
+        if (!kit || !field) break;
+        const order = deckOrder(kit);
+        const card = kit.flashcards.items[order[flashState.index]];
+        if (!card) break;
+        flashState.typed = field.value;
+        flashState.typedVerdict = compareTyped(flashState.reversed ? card.front : card.back, field.value);
+        render();
+        const next = els.view.querySelector("[data-card-typed]");
+        if (next) next.focus();
+        break;
+      }
+      case "reverse-cards": {
+        flashState.reversed = !flashState.reversed;
+        flashState.flipped = false;
+        flashState.typed = "";
+        flashState.typedVerdict = null;
+        render();
+        toast(flashState.reversed ? "Now showing the meaning first." : "Back to the term first.");
+        break;
+      }
+      case "start-match": {
+        const kit = store.getKit(route.id);
+        if (kit) startMatch(kit);
+        break;
+      }
+      case "stop-match": {
+        stopMatchClock();
+        matchState = { kitId: null, active: false, tiles: [], picked: [], matched: [], wrong: 0, startedAt: 0, finished: false };
+        render();
+        break;
+      }
+      case "match-tile": {
+        const index = Number(actionEl.dataset.tile);
+        if (Number.isInteger(index)) pickMatchTile(index);
+        break;
+      }
       case "shuffle-cards":
         shuffleDeck();
         break;
@@ -2729,6 +5797,12 @@
         if (kit) startExam(kit);
         break;
       }
+      case "exam-overview": {
+        examState.status = "idle";
+        examState.result = null;
+        render();
+        break;
+      }
       case "retake-exam": {
         const kit = store.getKit(route.id);
         if (!kit || !kit.exam) break;
@@ -2743,10 +5817,44 @@
         });
         break;
       }
+      case "exam-jump": {
+        const index = Number(actionEl.dataset.q);
+        const items = els.view.querySelectorAll(".exam-questions .q");
+        const target = items[index];
+        if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+        break;
+      }
       case "exam-answer": {
         if (examState.status !== "running") break;
         examState.answers[Number(actionEl.dataset.q)] = Number(actionEl.dataset.opt);
+        saveExamDraft();
         render();
+        break;
+      }
+      case "resume-exam": {
+        const kit = store.getKit(route.id) || store.getKit(examState.kitId);
+        const draft = kit && readExamDraft(kit.id);
+        if (!kit || !draft) {
+          toast("That exam could not be restored.", "error");
+          break;
+        }
+        examState = {
+          kitId: kit.id,
+          status: "running",
+          answers: draft.answers || {},
+          startedAt: draft.startedAt || Date.now(),
+          endsAt: draft.endsAt || Date.now(),
+          secondsUsed: 0,
+          result: null,
+        };
+        render();
+        if (Date.now() >= examState.endsAt) submitExam("timeout");
+        break;
+      }
+      case "discard-exam": {
+        clearExamDraft();
+        render();
+        toast("Unfinished exam discarded.");
         break;
       }
       case "submit-exam": {
@@ -2765,6 +5873,44 @@
         }
         break;
       }
+      case "print-exam": {
+        const kit = store.getKit(id);
+        if (kit) printExam(kit);
+        break;
+      }
+      case "print-quiz": {
+        const kit = store.getKit(id);
+        if (kit) printQuiz(kit);
+        break;
+      }
+      case "print-deck": {
+        const kit = store.getKit(id);
+        if (kit) printDeck(kit);
+        break;
+      }
+      case "download-attempts": {
+        download(
+          `studyforge-attempts-${new Date().toISOString().slice(0, 10)}.csv`,
+          attemptsToCsv(store.get()),
+          "text/csv;charset=utf-8",
+        );
+        toast("Attempts exported.", "success");
+        break;
+      }
+      case "download-results": {
+        const kit = store.getKit(route.id);
+        if (kit) {
+          download(safeFileName(kit.name + " results", "md"), resultsToMarkdown(kit), "text/markdown;charset=utf-8");
+        }
+        break;
+      }
+      case "download-exam": {
+        const kit = store.getKit(id);
+        if (kit && kit.exam) {
+          download(safeFileName(kit.name + " practice test", "md"), examToMarkdown(kit), "text/markdown;charset=utf-8");
+        }
+        break;
+      }
       case "download-quiz": {
         const kit = store.getKit(id);
         if (kit && kit.quiz) {
@@ -2774,29 +5920,116 @@
       }
       case "select-doc":
         docViewId = id;
+        // A different document starts at the top, not where the last one ended.
+        delete docScroll[`${route.id}:${id}`];
         render();
+        try {
+          window.scrollTo(0, 0);
+        } catch (error) {
+          /* fine */
+        }
         break;
+      case "toc-jump": {
+        const body = els.view.querySelector("[data-doc-body]");
+        const index = Number(actionEl.dataset.index);
+        const target = body ? body.querySelectorAll("h1, h2, h3")[index] : null;
+        if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+        break;
+      }
+      case "practise-weak": {
+        const kit = store.getKit(route.id);
+        if (!kit || !kit.quiz) break;
+        const stats = quizAnalytics(kit);
+        const wording = new Set((stats ? stats.trouble : []).map((entry) => String(entry.question).toLowerCase().trim()));
+        const items = kit.quiz.items.filter((item) => wording.has(String(item.question).toLowerCase().trim()));
+        if (!items.length) {
+          toast("No trouble spots to practise yet.", "info");
+          break;
+        }
+        quizState = {
+          kitId: kit.id,
+          status: "running",
+          index: 0,
+          phase: "answering",
+          answers: {},
+          results: {},
+          startedAt: Date.now(),
+          questionStartedAt: Date.now(),
+          attempt: null,
+          items,
+          retry: true,
+        };
+        render();
+        window.scrollTo({ top: 0, behavior: "smooth" });
+        toast(`Practising ${plural(items.length, "trouble spot")}.`, "info");
+        break;
+      }
+      case "practise-missed": {
+        const kit = store.getKit(quizState.kitId || route.id);
+        const attempt = quizState.attempt;
+        if (!kit || !attempt) break;
+        const missed = attempt.answers
+          .map((answer, index) => ({ answer, item: kit.quiz.items[index] }))
+          .filter((entry) => !entry.answer.correct && entry.item);
+        if (!missed.length) {
+          toast("Nothing to redo — every question was correct.", "success");
+          break;
+        }
+        quizState = {
+          kitId: kit.id,
+          status: "running",
+          index: 0,
+          phase: "answering",
+          answers: {},
+          results: {},
+          startedAt: Date.now(),
+          questionStartedAt: Date.now(),
+          attempt: null,
+          items: missed.map((entry) => entry.item),
+          retry: true,
+        };
+        render();
+        toast(`${plural(missed.length, "question")} to retry.`);
+        break;
+      }
       case "start-quiz":
       case "retry-quiz": {
-        startQuiz(id);
+        startQuiz(id || quizState.kitId);
         break;
       }
       case "quiz-choose": {
         if (quizState.status !== "running" || quizState.phase !== "answering") break;
         quizState.answers[quizState.index] = { choice: Number(actionEl.dataset.opt) };
+        saveQuizDraft();
         render();
         break;
       }
       case "quiz-next":
         quizNext();
         break;
+      case "resume-quiz": {
+        const draft = readQuizDraft(id || quizState.kitId || route.id);
+        if (!draft) {
+          toast("That quiz could not be restored.", "error");
+          break;
+        }
+        resumeQuiz(draft);
+        break;
+      }
+      case "discard-draft": {
+        clearQuizDraft();
+        toast("Unfinished quiz discarded.");
+        render();
+        break;
+      }
       case "quit-quiz": {
         openModal({
           title: "Leave this quiz?",
-          body: `<p>Your progress in this run is not saved until you submit the quiz on the last question.</p>`,
+          body: `<p>Your answers are kept on this device, so you can resume this run later from the quiz page.</p>`,
           confirmLabel: "Leave quiz",
-          danger: true,
+          cancelLabel: "Keep going",
           onConfirm: () => {
+            saveQuizDraft();
             resetQuiz(quizState.kitId);
             render();
           },
@@ -2807,9 +6040,41 @@
         resetQuiz(quizState.kitId);
         render();
         break;
+      case "review-exam-attempt": {
+        const kit = route.name === "kit" ? store.getKit(route.id) : null;
+        const attempt =
+          kit && kit.exam && (kit.exam.attempts || []).find((item) => item.id === id);
+        if (!attempt) break;
+        openAttemptReview(attempt);
+        break;
+      }
+      case "review-attempt": {
+        const kitId =
+          (actionEl && actionEl.dataset && actionEl.dataset.kit) ||
+          quizState.kitId ||
+          (route.name === "kit" ? route.id : null);
+        const kit = kitId ? store.getKit(kitId) : null;
+        const attempt = kit && kit.quiz && (kit.quiz.attempts || []).find((item) => item.id === id);
+        if (!attempt) break;
+        openAttemptReview(attempt);
+        break;
+      }
+      case "sort-attempts": {
+        const key = actionEl.dataset.key;
+        if (attemptSort.key === key) {
+          attemptSort.direction = attemptSort.direction === "asc" ? "desc" : "asc";
+        } else {
+          attemptSort = { key, direction: key === "date" ? "desc" : "asc" };
+        }
+        render();
+        break;
+      }
       case "delete-quiz-attempt": {
         const kitId = quizState.kitId || (route.name === "kit" ? route.id : null);
-        if (kitId && store.deleteKitQuizAttempt(kitId, id)) toast("Attempt deleted.", "success");
+        if (kitId) {
+          undoableDelete(() => store.deleteKitQuizAttempt(kitId, id), "Attempt deleted.");
+          render();
+        }
         break;
       }
       default:
@@ -2818,10 +6083,57 @@
   }
 
   /** Keep short-answer text in state as it is typed, and gate the Next button. */
+  /** Persist the kit scratch pad and refresh its word count. */
+  // One timer per kit: switching kits mid-edit must not drop the first one's text.
+  const notesTimers = new Map();
+  function notesAutosave(kitId, value) {
+    if (!kitId) return;
+    const existing = notesTimers.get(kitId);
+    if (existing) clearTimeout(existing);
+    notesTimers.set(
+      kitId,
+      setTimeout(() => {
+        notesTimers.delete(kitId);
+        store.updateKit(kitId, { notes: value });
+        const status = els.view.querySelector("[data-notes-status]");
+        if (status) status.textContent = "Saved automatically.";
+      }, 900),
+    );
+  }
+
+  function saveKitNotes(kitId) {
+    const box = els.view.querySelector("[data-kit-notes]");
+    if (!box || !kitId) return;
+    store.updateKit(kitId, { notes: box.value });
+    const count = els.view.querySelector("[data-notes-count]");
+    const words = box.value.trim() ? box.value.trim().split(/\s+/).length : 0;
+    if (count) count.textContent = words ? `${words} word${words === 1 ? "" : "s"}` : "empty";
+    const status = els.view.querySelector("[data-notes-status]");
+    if (status) status.textContent = "Saved.";
+    toast("Notes saved.", "success");
+  }
+
   function onInput(event) {
+    const notes = event.target.closest("[data-kit-notes]");
+    if (notes) {
+      const count = els.view.querySelector("[data-notes-count]");
+      const words = notes.value.trim() ? notes.value.trim().split(/\s+/).length : 0;
+      if (count) count.textContent = words ? `${words} word${words === 1 ? "" : "s"}` : "empty";
+      const status = els.view.querySelector("[data-notes-status]");
+      if (status) status.textContent = "Unsaved…";
+      // Autosave: nobody should lose a thought because they forgot a button.
+      notesAutosave(notes.dataset.id, notes.value);
+      return;
+    }
+    const find = event.target.closest("[data-doc-find]");
+    if (find) {
+      scheduleDocFind(find.value);
+      return;
+    }
     const field = event.target.closest("[data-quiz-input]");
     if (!field || quizState.status !== "running") return;
     quizState.answers[quizState.index] = { text: field.value };
+    saveQuizDraft();
     const next = els.view.querySelector('[data-action="quiz-next"]');
     if (next) next.disabled = !field.value.trim();
   }
@@ -2870,9 +6182,17 @@
     els.view.addEventListener("dragleave", onDragLeave);
     els.view.addEventListener("drop", onDrop);
     els.nav.addEventListener("click", onClick);
+    // The engine chip lives in the topbar, outside the view and nav containers.
+    const providerSlot = $("provider-slot");
+    if (providerSlot) providerSlot.addEventListener("click", onClick);
 
     els.search.addEventListener("input", () => {
       query = els.search.value.trim();
+      // Searching means looking at the library, so leave a kit or the activity page.
+      if (query && route.name !== "dashboard") {
+        navigate("#/");
+        return;
+      }
       scheduleRender();
     });
 
@@ -2893,8 +6213,10 @@
     $("btn-new-kit").addEventListener("click", () => openNewKit());
     $("btn-settings").addEventListener("click", () => openSettings());
     $("btn-export").addEventListener("click", () => {
+      store.setSettings({ lastBackupAt: new Date().toISOString() });
       download(`studyforge-backup-${new Date().toISOString().slice(0, 10)}.json`, store.exportData(), "application/json");
       toast("Backup exported.", "success");
+      render();
     });
     $("btn-import").addEventListener("click", () => $("import-file").click());
     $("import-file").addEventListener("change", async (event) => {
@@ -2915,6 +6237,17 @@
     });
 
     /* Theme: light by default, dark on demand; remembered per browser. */
+    window.addEventListener("beforeinstallprompt", (event) => {
+      event.preventDefault();
+      installPrompt = event;
+    });
+    window.addEventListener("appinstalled", () => {
+      installPrompt = null;
+      toast("StudyForge is installed. Find it with your other apps.", "success");
+    });
+    window.addEventListener("offline", () => toast("You are offline — StudyForge keeps working on device.", "info"));
+    window.addEventListener("online", () => toast("Back online.", "success"));
+
     const themeButton = $("btn-theme");
     const applyTheme = (theme) => {
       document.documentElement.dataset.theme = theme;
@@ -2957,11 +6290,24 @@
       document.body.classList.remove("nav-open");
       render();
     });
-    store.subscribe(scheduleRender);
+    let storageWarned = false;
+    store.subscribe((state, storageError) => {
+      // Running out of localStorage must never fail silently.
+      if (storageError && !storageWarned) {
+        storageWarned = true;
+        toast(
+          "This browser's storage is full, so changes may not be saved. Export a backup and delete old kits.",
+          "error",
+        );
+      }
+      if (!storageError) storageWarned = false;
+      scheduleRender();
+    });
 
     let lastSeenJob = null;
     jobs.subscribe((current) => {
       renderJobBar();
+      autoForgeAfterDocument(current, lastSeenJob);
       if (lastSeenJob && current !== lastSeenJob) {
         const finished = jobs.getLast();
         if (finished) {
@@ -2987,10 +6333,52 @@
       lastSeenJob = current;
     });
 
+    // Remember how far down a guide the reader is (cheap, throttled by rAF).
+    let scrollTick = 0;
+    window.addEventListener(
+      "scroll",
+      () => {
+        if (scrollTick) return;
+        scrollTick = requestAnimationFrame(() => {
+          scrollTick = 0;
+          if (route.name !== "kit" || route.tab !== "documents") return;
+          docScroll[`${route.id}:${docViewId || "first"}`] = window.scrollY || 0;
+        });
+      },
+      { passive: true },
+    );
+
+    window.addEventListener("offline", () => {
+      renderProviderBadge();
+      toast("You are offline — everything still works in this browser.", "info");
+    });
+    window.addEventListener("online", () => {
+      renderProviderBadge();
+      toast("Back online.", "success");
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest || !event.target.closest("[data-skip-link]")) return;
+      event.preventDefault();
+      els.view.focus();
+    });
+
     document.addEventListener("keydown", (event) => {
       // Flashcard deck: Space flips, arrows walk the deck — unless the user is
       // typing somewhere or a dialog is open.
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName);
+      // Typing mode: Enter checks the answer instead of flipping.
+      if (
+        event.target.matches &&
+        event.target.matches("[data-card-typed]") &&
+        event.key === "Enter" &&
+        !event.shiftKey
+      ) {
+        event.preventDefault();
+        const check = els.view.querySelector('[data-action="card-check-typed"]');
+        if (check) check.click();
+        return;
+      }
       if (
         route.name === "kit" &&
         route.tab === "flashcards" &&
@@ -3014,19 +6402,112 @@
           moveCard(-1);
           return;
         }
+        // Rate straight from the keyboard once the answer is showing.
+        if (flashState.flipped && /^(1|k)$/i.test(event.key)) {
+          const known = els.view.querySelector('[data-action="card-known"]');
+          if (known) {
+            event.preventDefault();
+            known.click();
+          }
+          return;
+        }
+        if (flashState.flipped && /^(2|a)$/i.test(event.key)) {
+          const again = els.view.querySelector('[data-action="card-again"]');
+          if (again) {
+            event.preventDefault();
+            again.click();
+          }
+          return;
+        }
+      }
+      // Quiz: number keys choose an option, Enter marks and advances.
+      if (
+        route.name === "kit" &&
+        route.tab === "questions" &&
+        quizState.status === "running" &&
+        !typing &&
+        els.modalRoot.hidden
+      ) {
+        if (/^[1-9]$/.test(event.key)) {
+          const options = els.view.querySelectorAll('[data-action="quiz-choose"]');
+          const index = Number(event.key) - 1;
+          if (options[index]) {
+            event.preventDefault();
+            options[index].click();
+          }
+          return;
+        }
+        if (event.key === "Enter") {
+          const next = els.view.querySelector('[data-action="quiz-next"]');
+          if (next && !next.disabled) {
+            event.preventDefault();
+            next.click();
+          }
+          return;
+        }
+      }
+      if (
+        event.target.matches &&
+        event.target.matches("[data-quiz-input]") &&
+        event.key === "Enter" &&
+        (event.metaKey || event.ctrlKey)
+      ) {
+        const next = els.view.querySelector('[data-action="quiz-next"]');
+        if (next && !next.disabled) {
+          event.preventDefault();
+          next.click();
+        }
+        return;
+      }
+      if (event.target && event.target.matches && event.target.matches("[data-doc-find]")) {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          stepDocFind(event.shiftKey ? -1 : 1);
+          return;
+        }
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.target.value = "";
+          clearDocFind();
+          return;
+        }
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         els.search.focus();
         els.search.select();
       }
+      if (event.key === "?" && !typing && els.modalRoot.hidden) {
+        event.preventDefault();
+        openShortcuts();
+        return;
+      }
+      // Cmd/Ctrl-Shift-X leaves a quiz run without a dialog (progress is saved).
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.shiftKey &&
+        event.key.toLowerCase() === "x" &&
+        route.name === "kit" &&
+        route.tab === "questions" &&
+        quizState.status === "running"
+      ) {
+        event.preventDefault();
+        saveQuizDraft();
+        resetQuiz(quizState.kitId);
+        render();
+        toast("Quiz left — you can resume it from the quiz page.");
+        return;
+      }
       if (event.key === "Escape") {
         document.body.classList.remove("nav-open");
+        if (document.body.classList.contains("doc-focus")) document.body.classList.remove("doc-focus");
       }
+      if (route.name !== "kit" || route.tab !== "documents") stopSpeech();
     });
 
     els.modalRoot.addEventListener("keydown", (event) => {
       if (event.key === "Escape") closeModal();
+      trapModalFocus(event);
       if (event.key === "Enter" && event.target.tagName === "INPUT") {
         const confirm = els.modalRoot.querySelector("[data-confirm]");
         if (confirm) confirm.click();
