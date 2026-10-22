@@ -252,6 +252,27 @@ async function playQuiz({ pick = 0 } = {}) {
     check("countdown shows a daily card pace", /cards a day/.test(strip ? strip.textContent : ""));
   }
 
+  // ---------- sorting past attempts ----------
+  window.location.hash = `#/kit/${kit.id}/questions`;
+  await wait(180);
+  const sortHeads = view().querySelectorAll('[data-action="sort-attempts"]');
+  check("attempt history has sortable columns", sortHeads.length >= 2, `${sortHeads.length} sortable`);
+  if (sortHeads.length) {
+    const scoreHead = [...sortHeads].find((node) => node.dataset.key === "score");
+    scoreHead.click();
+    await wait(160);
+    const scores = [...view().querySelectorAll(".attempt-row .attempt-score")].map((node) =>
+      Number(String(node.textContent).replace("%", "")),
+    );
+    check(
+      "sorting by score orders the rows",
+      scores.length > 1 ? scores.every((value, index) => index === 0 || scores[index - 1] <= value) : true,
+      scores.join(","),
+    );
+    const pacing = view().querySelectorAll(".attempt-row .attempt-main .muted")[0];
+    check("attempts show a per-question pace", /s per question/.test(String(pacing && pacing.textContent)));
+  }
+
   // ---------- activity page ----------
   window.location.hash = "#/activity";
   await wait(200);

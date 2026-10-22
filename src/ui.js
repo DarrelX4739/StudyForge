@@ -1999,6 +1999,58 @@ Active transport is the movement of substances against a concentration gradient,
   }
 
   /** Every saved run for this kit, newest first. */
+  // Past-attempt listing: sortable columns, then the rows.
+  let attemptSort = { key: "date", direction: "desc" };
+
+  function sortedAttempts(attempts) {
+    const value = (attempt) => {
+      if (attemptSort.key === "score") return attempt.percent;
+      if (attemptSort.key === "time") return attempt.secondsUsed || 0;
+      return new Date(attempt.takenAt).getTime();
+    };
+    const direction = attemptSort.direction === "asc" ? 1 : -1;
+    return attempts.slice().sort((a, b) => (value(a) - value(b)) * direction);
+  }
+
+  function attemptTable(attempts) {
+    const arrow = (key) =>
+      attemptSort.key === key ? `<span class="sort-arrow">${attemptSort.direction === "asc" ? "▲" : "▼"}</span>` : "";
+    const header = (key, label) =>
+      `<button class="sort-head ${attemptSort.key === key ? "active" : ""}" data-action="sort-attempts" data-key="${key}">${label}${arrow(
+        key,
+      )}</button>`;
+    return `
+      <div class="attempt-grid-head">
+        <span>${header("score", "Score")}</span>
+        <span>Correct</span>
+        <span>${header("date", "When")}</span>
+        <span>${header("time", "Pace")}</span>
+        <span>Graph</span>
+        <span></span>
+      </div>
+      <ol class="attempt-list">${sortedAttempts(attempts)
+        .map(
+          (attempt) => `
+            <li class="attempt-row">
+              <span class="attempt-score ${attempt.percent >= 70 ? "good" : attempt.percent >= 50 ? "mid" : "low"}">${attempt.percent}%</span>
+              <span class="attempt-main">
+                <strong>${attempt.correct}/${attempt.total}</strong>
+                <span class="muted tiny">${
+                  attempt.total ? `${Math.round((attempt.secondsUsed || 0) / attempt.total)}s per question` : ""
+                }</span>
+              </span>
+              <span class="muted tiny attempt-when">${esc(new Date(attempt.takenAt).toLocaleString())}${
+                attempt.secondsUsed ? ` · ${formatClock(attempt.secondsUsed)}` : ""
+              }</span>
+              <span class="attempt-bar"><span style="width:${attempt.percent}%"></span></span>
+              <button class="btn ghost small" data-action="review-attempt" data-id="${esc(attempt.id)}">Review</button>
+              <button class="icon-btn danger" title="Delete this attempt" data-action="delete-quiz-attempt"
+                data-id="${esc(attempt.id)}">×</button>
+            </li>`,
+        )
+        .join("")}</ol>`;
+  }
+
   function renderAttempts(kit) {
     const attempts = (kit.quiz && kit.quiz.attempts) || [];
     const best = attempts.reduce(
@@ -2017,24 +2069,7 @@ Active transport is the movement of substances against a concentration gradient,
         </div>
         ${
           attempts.length
-            ? `<ol class="attempt-list">${attempts
-                .map(
-                  (attempt) => `
-                    <li class="attempt-row">
-                      <span class="attempt-score ${attempt.percent >= 70 ? "good" : attempt.percent >= 50 ? "mid" : "low"}">${attempt.percent}%</span>
-                      <span class="attempt-main">
-                        <strong>${attempt.correct}/${attempt.total} correct</strong>
-                        <span class="muted tiny">${esc(new Date(attempt.takenAt).toLocaleString())}${
-                          attempt.secondsUsed ? ` · ${formatClock(attempt.secondsUsed)}` : ""
-                        }</span>
-                      </span>
-                      <span class="attempt-bar"><span style="width:${attempt.percent}%"></span></span>
-                      <button class="btn ghost small" data-action="review-attempt" data-id="${esc(attempt.id)}">Review</button>
-                      <button class="icon-btn danger" title="Delete this attempt" data-action="delete-quiz-attempt"
-                        data-id="${esc(attempt.id)}">×</button>
-                    </li>`,
-                )
-                .join("")}</ol>`
+            ? attemptTable(attempts)
             : `<p class="muted small">No attempts yet — finish a quiz and your score lands here.</p>`
         }
       </section>`;
@@ -5759,6 +5794,16 @@ Active transport is the movement of substances against a concentration gradient,
         const attempt = kit && kit.quiz && (kit.quiz.attempts || []).find((item) => item.id === id);
         if (!attempt) break;
         openAttemptReview(attempt);
+        break;
+      }
+      case "sort-attempts": {
+        const key = actionEl.dataset.key;
+        if (attemptSort.key === key) {
+          attemptSort.direction = attemptSort.direction === "asc" ? "desc" : "asc";
+        } else {
+          attemptSort = { key, direction: key === "date" ? "desc" : "asc" };
+        }
+        render();
         break;
       }
       case "delete-quiz-attempt": {

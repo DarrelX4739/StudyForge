@@ -446,7 +446,7 @@ npm test
 | `local-engine` | The on-device generator on its own (plain node): guide sections, card quality, four-option questions, seeds and refusals. |
 | `insights` | Progress analytics across attempts, trouble spots, per-question pace, hardest cards, card editing, the review schedule and exam resume. |
 
-All eight suites pass — 289 checks, zero console errors.
+All eight suites pass — 291 checks, zero console errors.
 
 ## Limitations
 
