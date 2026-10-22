@@ -61,6 +61,8 @@
         flashcardStyle: DEFAULT_FLASHCARD_STYLE,
         // How many days a week the learner aims to study (used on the dashboard).
         weeklyGoal: 5,
+        // When a backup was last downloaded, so the app can nudge gently.
+        lastBackupAt: "",
       },
     };
   }
@@ -184,6 +186,7 @@
         const goal = Math.round(Number(settings.weeklyGoal));
         return Number.isFinite(goal) ? Math.min(7, Math.max(1, goal)) : 5;
       })(),
+      lastBackupAt: str(settings.lastBackupAt),
     };
     return next;
   }
@@ -882,6 +885,9 @@
       state.settings.ocrLanguage = OCR_LANGUAGES.includes(patch.ocrLanguage) ? patch.ocrLanguage : "eng";
     }
     if ("ocrScale" in patch) state.settings.ocrScale = clampScale(patch.ocrScale);
+    if ("lastBackupAt" in patch) {
+      state.settings.lastBackupAt = str(patch.lastBackupAt);
+    }
     if ("weeklyGoal" in patch) {
       const goal = Math.round(Number(patch.weeklyGoal));
       state.settings.weeklyGoal = Number.isFinite(goal) ? Math.min(7, Math.max(1, goal)) : 5;

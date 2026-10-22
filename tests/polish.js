@@ -205,6 +205,18 @@ const modal = () => window.document.getElementById("modal-root");
     }
   }
 
+  // ---------- notes autosave ----------
+  window.location.hash = `#/kit/${kit.id}`;
+  await wait(160);
+  const notesBox = view().querySelector("[data-kit-notes]");
+  check("kit has a notes box", Boolean(notesBox));
+  if (notesBox) {
+    notesBox.value = "Autosaved note about active transport.";
+    notesBox.dispatchEvent(new window.Event("input", { bubbles: true }));
+    await wait(1200);
+    check("notes autosave without pressing a button", store.getKit(kit.id).notes.includes("Autosaved"));
+  }
+
   // ---------- search reaches inside a kit ----------
   window.location.hash = "#/";
   await wait(150);
@@ -222,6 +234,19 @@ const modal = () => window.document.getElementById("modal-root");
   searchBox.value = "";
   searchBox.dispatchEvent(new window.Event("input", { bubbles: true }));
   await wait(150);
+
+  // ---------- backup nudge ----------
+  window.location.hash = "#/";
+  await wait(150);
+  const nudge = view().querySelector(".backup-nudge");
+  check("nudge asks for a backup when none was made", Boolean(nudge));
+  if (nudge) {
+    view().querySelector(".backup-nudge [data-action=\"export-backup\"]").click();
+    await wait(200);
+    check("exporting records the backup date", Boolean(store.getSettings().lastBackupAt));
+    await wait(150);
+    check("nudge disappears after a backup", !view().querySelector(".backup-nudge"));
+  }
 
   // ---------- reading controls ----------
   window.location.hash = `#/kit/${kit.id}/documents`;

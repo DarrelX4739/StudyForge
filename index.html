@@ -853,6 +853,24 @@
     padding:4px 14px;max-width:max-content;
   }
 
+  .backup-nudge{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 12px}
+  .backup-nudge .btn{margin-left:auto}
+
+  /* Deck tools tucked behind one disclosure */
+  .deck-more{position:relative;display:inline-block}
+  .deck-more > summary{
+    list-style:none;cursor:pointer;display:inline-flex;align-items:center;gap:6px;
+  }
+  .deck-more > summary::-webkit-details-marker{display:none}
+  .deck-more > summary::after{content:"⌄";font-size:.9em;line-height:1}
+  .deck-more[open] > summary::after{content:"⌃"}
+  .deck-more-body{
+    position:absolute;z-index:20;top:calc(100% + 6px);left:50%;transform:translateX(-50%);
+    display:flex;flex-direction:column;gap:6px;padding:8px;border-radius:var(--r-2);
+    background:var(--panel);border:1px solid var(--line);box-shadow:var(--shadow-pop);min-width:170px;
+  }
+  .deck-more-body .btn{justify-content:flex-start;width:100%}
+
   /* Resume an unfinished quiz */
   .quiz-draft{
     display:flex;align-items:center;gap:14px;flex-wrap:wrap;
@@ -1110,9 +1128,16 @@
   @media (prefers-reduced-motion:reduce){
     *{animation-duration:.001ms !important;transition-duration:.001ms !important}
   }
+</  .skip-link{
+    position:absolute;left:-9999px;top:8px;z-index:99;padding:8px 14px;border-radius:8px;
+    background:var(--text);color:var(--bg);font-size:.85rem;font-weight:600;
+  }
+  .skip-link:focus{left:12px}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 </style>
 </head>
 <body>
+<a class="skip-link" href="#view" data-skip-link>Skip to content</a>
 <div class="app">
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-top">
@@ -1169,7 +1194,7 @@
         </button>
       </div>
     </header>
-    <main class="view" id="view"></main>
+    <main class="view" id="view" tabindex="-1"></main>
   </div>
 </div>
 
@@ -1208,14 +1233,14 @@
       done = true;
       console.warn("[StudyForge] " + reason + "; loading the project files directly.");
       [
-        "./src/store.js?v=2026-10-22j",
-        "./src/local.js?v=2026-10-22j",
-        "./src/markdown.js?v=2026-10-22j",
-        "./src/ocr.js?v=2026-10-22j",
-        "./src/ai.js?v=2026-10-22j",
-        "./src/jobs.js?v=2026-10-22j",
-        "./src/ui.js?v=2026-10-22j",
-        "./src/main.js?v=2026-10-22j",
+        "./src/store.js?v=2026-10-22k",
+        "./src/local.js?v=2026-10-22k",
+        "./src/markdown.js?v=2026-10-22k",
+        "./src/ocr.js?v=2026-10-22k",
+        "./src/ai.js?v=2026-10-22k",
+        "./src/jobs.js?v=2026-10-22k",
+        "./src/ui.js?v=2026-10-22k",
+        "./src/main.js?v=2026-10-22k",
       ].forEach(function (src) {
         var script = document.createElement("script");
         script.src = src;

@@ -227,6 +227,8 @@ merged, de-duplicated by prompt and interleaved so the deck is not grouped by re
 - **Edit card** fixes a prompt or answer in place; the card keeps its review schedule.
 - **Paste cards** imports a whole deck from plain text — `Prompt | Answer`, one per line (a tab,
   `=`, or ` - ` works too).
+- **Notes autosave** as you type, and a gentle backup nudge after two weeks — everything lives in
+  this browser, so the library can be saved to a JSON file in one click.
 - **Undo** on every delete — the toast puts the kit, class or attempt straight back.
 - **Resume a quiz**: an unfinished run is kept on your device, so closing the tab or reloading
   never loses marked answers — the quiz page offers Resume or Discard.

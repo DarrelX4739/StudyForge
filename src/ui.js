@@ -767,6 +767,7 @@ Active transport is the movement of substances against a concentration gradient,
           : ""
       }
       ${renderStreakStrip(state)}
+      ${renderBackupNudge(state)}
       ${renderDuePanel(state)}
       ${renderWeekStrip(state)}
       ${renderContinueCard(state)}
@@ -954,6 +955,23 @@ Active transport is the movement of substances against a concentration gradient,
     // Days still to come this week count towards the goal, past ones do not.
     const remaining = days.filter((day) => day.future).length;
     return { done, days, goal, remaining, onTrack: done + remaining >= goal };
+  }
+
+  /**
+   * Everything lives in this browser, so a backup is the only thing between the
+   * learner and a cleared cache. Nudge quietly after two weeks.
+   */
+  function renderBackupNudge(state) {
+    if (!state.kits.length) return "";
+    const last = state.settings && state.settings.lastBackupAt;
+    const days = last ? (Date.now() - new Date(last).getTime()) / 86400000 : Infinity;
+    if (days < 14) return "";
+    return `
+      <div class="notice subtle backup-nudge">
+        <span>${last ? "Your last backup was a while ago." : "You have not backed up this library yet."}
+          Everything is stored in this browser only.</span>
+        <button class="btn small" data-action="export-backup">Download backup</button>
+      </div>`;
   }
 
   /** Streak + a two-week heat strip, so momentum is visible at a glance. */
@@ -2091,18 +2109,23 @@ Active transport is the movement of substances against a concentration gradient,
               : ""
           }
           <button class="btn small ghost" data-action="shuffle-cards">Shuffle</button>
-          <button class="btn small ghost" data-action="restart-cards">Restart</button>
-          ${
-            knownCount || againCount
-              ? `<button class="btn small ghost" data-action="reset-progress">Reset progress</button>`
-              : ""
-          }
-          <button class="btn small ghost" data-action="add-card">Add card</button>
-          <button class="btn small ghost" data-action="import-cards">Paste cards</button>
-          <button class="btn small ghost" data-action="edit-card">Edit card</button>
           <button class="btn small ghost" data-action="deck-list">${
             flashState.showList ? "Back to card" : "Browse all"
           }</button>
+          <details class="deck-more">
+            <summary class="btn small ghost">Edit deck</summary>
+            <div class="deck-more-body">
+              <button class="btn small ghost" data-action="add-card">Add card</button>
+              <button class="btn small ghost" data-action="import-cards">Paste cards</button>
+              <button class="btn small ghost" data-action="edit-card">Edit card</button>
+              <button class="btn small ghost" data-action="restart-cards">Restart</button>
+              ${
+                knownCount || againCount
+                  ? `<button class="btn small ghost" data-action="reset-progress">Reset progress</button>`
+                  : ""
+              }
+            </div>
+          </details>
         </div>
         ${flashState.showList ? renderDeckList(items) : ""}
       </div>`;
@@ -3877,13 +3900,24 @@ Active transport is the movement of substances against a concentration gradient,
   }
 
   function download(filename, content, type = "text/plain;charset=utf-8") {
-    const blob = new Blob([content], { type });
-    const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
-    anchor.href = url;
     anchor.download = filename;
+    let url = "";
+    try {
+      url = URL.createObjectURL(new Blob([content], { type }));
+      anchor.href = url;
+    } catch (error) {
+      // Very old browsers, or a locked-down webview: fall back to a data URL.
+      try {
+        anchor.href = `data:${type};base64,${btoa(unescape(encodeURIComponent(content)))}`;
+      } catch (inner) {
+        toast("This browser blocked the download.", "error");
+        return false;
+      }
+    }
     anchor.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    if (url) setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return true;
   }
 
   function safeFileName(name, extension) {
@@ -4128,12 +4162,14 @@ Active transport is the movement of substances against a concentration gradient,
         navigate(`#/kit/${id}`);
         break;
       case "export-backup":
+        store.setSettings({ lastBackupAt: new Date().toISOString() });
         download(
           `studyforge-backup-${new Date().toISOString().slice(0, 10)}.json`,
           store.exportData(),
           "application/json",
         );
         toast("Backup exported.", "success");
+        render();
         break;
       case "import-backup":
         $("import-file").click();
@@ -4775,6 +4811,17 @@ Active transport is the movement of substances against a concentration gradient,
 
   /** Keep short-answer text in state as it is typed, and gate the Next button. */
   /** Persist the kit scratch pad and refresh its word count. */
+  let notesTimer = null;
+  function notesAutosave(kitId, value) {
+    if (!kitId) return;
+    if (notesTimer) clearTimeout(notesTimer);
+    notesTimer = setTimeout(() => {
+      store.updateKit(kitId, { notes: value });
+      const status = els.view.querySelector("[data-notes-status]");
+      if (status) status.textContent = "Saved automatically.";
+    }, 900);
+  }
+
   function saveKitNotes(kitId) {
     const box = els.view.querySelector("[data-kit-notes]");
     if (!box || !kitId) return;
@@ -4795,6 +4842,8 @@ Active transport is the movement of substances against a concentration gradient,
       if (count) count.textContent = words ? `${words} word${words === 1 ? "" : "s"}` : "empty";
       const status = els.view.querySelector("[data-notes-status]");
       if (status) status.textContent = "Unsaved…";
+      // Autosave: nobody should lose a thought because they forgot a button.
+      notesAutosave(notes.dataset.id, notes.value);
       return;
     }
     const find = event.target.closest("[data-doc-find]");
@@ -4880,8 +4929,10 @@ Active transport is the movement of substances against a concentration gradient,
     $("btn-new-kit").addEventListener("click", () => openNewKit());
     $("btn-settings").addEventListener("click", () => openSettings());
     $("btn-export").addEventListener("click", () => {
+      store.setSettings({ lastBackupAt: new Date().toISOString() });
       download(`studyforge-backup-${new Date().toISOString().slice(0, 10)}.json`, store.exportData(), "application/json");
       toast("Backup exported.", "success");
+      render();
     });
     $("btn-import").addEventListener("click", () => $("import-file").click());
     $("import-file").addEventListener("change", async (event) => {
@@ -4996,6 +5047,12 @@ Active transport is the movement of substances against a concentration gradient,
         scheduleRender();
       }
       lastSeenJob = current;
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!event.target.closest || !event.target.closest("[data-skip-link]")) return;
+      event.preventDefault();
+      els.view.focus();
     });
 
     document.addEventListener("keydown", (event) => {
