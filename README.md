@@ -224,6 +224,10 @@ merged, de-duplicated by prompt and interleaved so the deck is not grouped by re
 - Choose 10, 20, 30 or 40 cards.
 - **Print deck** produces a clean two-column sheet of every prompt and answer for offline revision.
 - **Edit card** fixes a prompt or answer in place; the card keeps its review schedule.
+- **Paste cards** imports a whole deck from plain text — `Prompt | Answer`, one per line (a tab,
+  `=`, or ` - ` works too).
+- **Resume a quiz**: an unfinished run is kept on your device, so closing the tab or reloading
+  never loses marked answers — the quiz page offers Resume or Discard.
 - **Two deck styles**, set under **Settings → Flashcards**:
   - **Vocabulary & concepts** — the front is the *term or concept* (no question mark), the back is its
     definition or explanation. Best for definitions, names and key ideas.

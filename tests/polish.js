@@ -132,6 +132,25 @@ const modal = () => window.document.getElementById("modal-root");
   check("the marked answer is shown as correct/wrong", Boolean(view().querySelector(".quiz-feedback, .option.correct")));
   check("marking does not advance the question", /Question 1/i.test(view().textContent));
 
+  // ---------- resume an unfinished quiz ----------
+  check(
+    "an unfinished quiz is kept on the device",
+    Boolean(window.localStorage.getItem("studyforge.quizdraft.v1")),
+  );
+  view().querySelector('[data-action="quit-quiz"]').click();
+  await wait(120);
+  window.document.querySelector("#modal-root [data-confirm]").click();
+  await wait(160);
+  const draftBanner = view().querySelector(".quiz-draft");
+  check("quiz page offers to resume", Boolean(draftBanner), draftBanner ? draftBanner.textContent.replace(/\s+/g, " ").slice(0, 60) : "");
+  const resumeBtn = view().querySelector('[data-action="resume-quiz"]');
+  if (resumeBtn) {
+    resumeBtn.click();
+    await wait(200);
+    check("resuming returns to the same question", /Question 1/i.test(view().textContent));
+    check("resumed quiz keeps the locked answer", view().querySelectorAll('[data-action="quiz-choose"]').length === 0);
+  }
+
   // Walk the rest
   for (let i = 0; i < 40; i += 1) {
     const opts = [...view().querySelectorAll('[data-action="quiz-choose"]')];
@@ -186,6 +205,33 @@ const modal = () => window.document.getElementById("modal-root");
     await wait(60);
     check("Esc leaves focus mode", !window.document.body.classList.contains("doc-focus"));
   }
+
+  // ---------- add a card by hand ----------
+  window.location.hash = `#/kit/${kit.id}/flashcards`;
+  await wait(150);
+  const addBtn = view().querySelector('[data-action="add-card"]');
+  check("deck offers manual card entry", Boolean(addBtn));
+  if (addBtn) {
+    const before = store.getKit(kit.id).flashcards.items.length;
+    addBtn.click();
+    await wait(120);
+    window.document.querySelector("#modal-root #new-front").value = "What is ATP?";
+    window.document.querySelector("#modal-root #new-back").value = "The cell's energy currency.";
+    window.document.querySelector("#modal-root [data-confirm]").click();
+    await wait(200);
+    check("manual card is saved", store.getKit(kit.id).flashcards.items.length === before + 1);
+  }
+
+  // ---------- keyboard rating ----------
+  window.location.hash = `#/kit/${kit.id}/flashcards`;
+  await wait(150);
+  view().querySelector('[data-action="flip-card"]').click();
+  await wait(80);
+  const ratedBefore = Object.keys(store.getKit(kit.id).flashcards.ratings || {}).length;
+  window.document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "k", bubbles: true }));
+  await wait(200);
+  const ratedAfter = Object.keys(store.getKit(kit.id).flashcards.ratings || {}).length;
+  check("K rates the current card", ratedAfter >= ratedBefore, `${ratedBefore} -> ${ratedAfter}`);
 
   // ---------- printable sheets ----------
   window.location.hash = `#/kit/${kit.id}/flashcards`;

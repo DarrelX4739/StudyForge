@@ -224,6 +224,72 @@
     };
   }
 
+  /* An unfinished quiz is kept on this device so a reload or an accidental
+     tab close never throws away answers. Only the run in progress is stored. */
+  const QUIZ_DRAFT_KEY = "studyforge.quizdraft.v1";
+
+  function saveQuizDraft() {
+    if (quizState.status !== "running" || !quizState.kitId) return;
+    if (quizState.phase === "marking") return;
+    try {
+      localStorage.setItem(
+        QUIZ_DRAFT_KEY,
+        JSON.stringify({
+          kitId: quizState.kitId,
+          index: quizState.index,
+          phase: quizState.phase,
+          answers: quizState.answers,
+          results: quizState.results,
+          startedAt: quizState.startedAt,
+          items: quizState.items,
+          retry: quizState.retry,
+          savedAt: new Date().toISOString(),
+        }),
+      );
+    } catch (error) {
+      /* Private mode or a full quota — the quiz still works, it just cannot resume. */
+    }
+  }
+
+  function readQuizDraft(kitId) {
+    try {
+      const raw = localStorage.getItem(QUIZ_DRAFT_KEY);
+      if (!raw) return null;
+      const draft = JSON.parse(raw);
+      if (!draft || draft.kitId !== kitId || !draft.answers) return null;
+      return draft;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function clearQuizDraft() {
+    try {
+      localStorage.removeItem(QUIZ_DRAFT_KEY);
+    } catch (error) {
+      /* ignore */
+    }
+  }
+
+  function resumeQuiz(draft) {
+    quizState = {
+      kitId: draft.kitId,
+      status: "running",
+      index: Math.max(0, Number(draft.index) || 0),
+      phase: draft.phase === "marked" ? "marked" : "answering",
+      answers: draft.answers || {},
+      results: draft.results || {},
+      startedAt: draft.startedAt || Date.now(),
+      questionStartedAt: Date.now(),
+      attempt: null,
+      items: Array.isArray(draft.items) ? draft.items : null,
+      retry: Boolean(draft.retry),
+    };
+    render();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    toast("Picked up where you left off.");
+  }
+
   /** Deck order: natural, or a stable shuffle stored in flashState.order. */
   function deckOrder(kit) {
     const total = kit.flashcards ? kit.flashcards.items.length : 0;
@@ -1510,6 +1576,7 @@ Active transport is the movement of substances against a concentration gradient,
     const best = attempts.reduce((top, attempt) => Math.max(top, attempt.percent), 0);
     const shortCount = quiz.items.filter((item) => item.type === "short").length;
     const choiceCount = quiz.items.length - shortCount;
+    const draft = readQuizDraft(kit.id);
 
     return `
       <div class="quiz-hero">
@@ -1526,9 +1593,27 @@ Active transport is the movement of substances against a concentration gradient,
             ${attempts.length ? `<span class="pill accent">Best ${best}%</span>` : `<span class="pill">No attempts yet</span>`}
           </div>
         </div>
-        <button class="btn primary lg" data-action="start-quiz">Start quiz</button>
+        <button class="btn primary lg" data-action="start-quiz">${draft ? "Start over" : "Start quiz"}</button>
       </div>
+      ${draft ? renderQuizDraftBanner(draft, quiz) : ""}
       ${renderAttempts(kit)}`;
+  }
+
+  function renderQuizDraftBanner(draft, quiz) {
+    const total = Array.isArray(draft.items) && draft.items.length ? draft.items.length : quiz.items.length;
+    const answered = Object.keys(draft.results || {}).length;
+    const position = Math.min(total, (Number(draft.index) || 0) + 1);
+    return `
+      <div class="quiz-draft" role="status">
+        <div class="quiz-draft-text">
+          <strong>You have a quiz in progress</strong>
+          <span class="muted small">${answered} of ${total} marked · you were on question ${position}</span>
+        </div>
+        <div class="quiz-draft-actions">
+          <button class="btn small primary" data-action="resume-quiz">Resume</button>
+          <button class="btn small ghost" data-action="discard-draft">Discard</button>
+        </div>
+      </div>`;
   }
 
   /** The questions in play: a full set, or the missed-only retry subset. */
@@ -1989,6 +2074,8 @@ Active transport is the movement of substances against a concentration gradient,
               ? `<button class="btn small ghost" data-action="reset-progress">Reset progress</button>`
               : ""
           }
+          <button class="btn small ghost" data-action="add-card">Add card</button>
+          <button class="btn small ghost" data-action="import-cards">Paste cards</button>
           <button class="btn small ghost" data-action="edit-card">Edit card</button>
           <button class="btn small ghost" data-action="deck-list">${
             flashState.showList ? "Back to card" : "Browse all"
@@ -2861,6 +2948,8 @@ Active transport is the movement of substances against a concentration gradient,
             ["Enter", "Mark & next, or flip a card"],
             ["Space", "Flip a flashcard"],
             ["← / →", "Previous / next card"],
+            ["1 / K · 2 / A", "Got it · show again"],
+            ["Enter", "Jump to the next find match in a guide"],
             ["?", "This list"],
             ["Esc", "Close a dialog"],
           ]
@@ -3341,6 +3430,7 @@ Active transport is the movement of substances against a concentration gradient,
         quizState.index = index + 1;
         quizState.phase = "answering";
         quizState.questionStartedAt = Date.now();
+        saveQuizDraft();
         render();
         window.scrollTo({ top: 0, behavior: "smooth" });
       }
@@ -3386,6 +3476,7 @@ Active transport is the movement of substances against a concentration gradient,
     );
     quizState.results[index] = result;
     quizState.phase = "marked";
+    saveQuizDraft();
     render();
   }
 
@@ -3425,6 +3516,7 @@ Active transport is the movement of substances against a concentration gradient,
     };
 
     store.addKitQuizAttempt(kit.id, attempt);
+    clearQuizDraft();
     quizState.status = "finished";
     quizState.phase = "marked";
     quizState.attempt = attempt;
@@ -3779,6 +3871,26 @@ Active transport is the movement of substances against a concentration gradient,
       window.print();
       setTimeout(cleanup, 1500);
     }, 40);
+  }
+
+  /**
+   * Turn pasted text into cards. One card per line, prompt and answer split on
+   * the first `|`, tab, `=` or padded hyphen so common formats just work.
+   */
+  function parseCardLines(raw) {
+    const cards = [];
+    String(raw || "")
+      .split(/\r?\n/)
+      .forEach((line) => {
+        const text = line.trim();
+        if (!text) return;
+        const match = text.match(/^(.*?)\s*(?:\||\t|=|\s-\s|–|—)\s*(.+)$/);
+        if (!match) return;
+        const front = match[1].trim().replace(/^[-*\d.\s]+/, "").trim();
+        const back = match[2].trim();
+        if (front && back) cards.push({ front, back });
+      });
+    return cards;
   }
 
   function printDeck(kit) {
@@ -4177,6 +4289,65 @@ Active transport is the movement of substances against a concentration gradient,
       case "card-again":
         markCard("again");
         break;
+      case "add-card": {
+        const kit = store.getKit(route.id);
+        if (!kit) break;
+        openModal({
+          title: "Add a card",
+          confirmLabel: "Add card",
+          body: `
+            <div class="field"><label for="new-front">Prompt</label>
+              <input id="new-front" type="text" placeholder="What should you be asked?"></div>
+            <div class="field"><label for="new-back">Answer</label>
+              <textarea id="new-back" rows="4" placeholder="What should you remember?"></textarea></div>
+            <p class="hint">Handy for the one fact your teacher keeps repeating.</p>`,
+          onConfirm: (root) => {
+            const front = root.querySelector("#new-front").value.trim();
+            const back = root.querySelector("#new-back").value.trim();
+            if (!front || !back) {
+              toast("A card needs both a prompt and an answer.", "error");
+              return false;
+            }
+            const current = kit.flashcards || { items: [] };
+            store.setKitFlashcards(kit.id, { ...current, items: [...(current.items || []), { front, back }] });
+            toast("Card added.", "success");
+          },
+        });
+        break;
+      }
+      case "import-cards": {
+        const kit = store.getKit(route.id);
+        if (!kit) break;
+        openModal({
+          title: "Paste cards",
+          confirmLabel: "Add cards",
+          body: `
+            <div class="field">
+              <label for="paste-cards">One card per line</label>
+              <textarea id="paste-cards" rows="8"
+                placeholder="Osmosis | Water moving across a membrane\nMitochondria - Where respiration happens"></textarea>
+              <span class="hint">Separate the prompt from the answer with <code>|</code>, a tab, <code>=</code> or <code> - </code>.
+                Everything after that becomes the answer.</span>
+            </div>
+            <div class="field">
+              <label class="check"><input type="checkbox" id="paste-replace"> Replace the cards already in this deck</label>
+            </div>`,
+          onConfirm: (root) => {
+            const raw = root.querySelector("#paste-cards").value;
+            const replace = root.querySelector("#paste-replace").checked;
+            const parsed = parseCardLines(raw);
+            if (!parsed.length) {
+              toast("No cards found — put one prompt and answer on each line.", "error");
+              return false;
+            }
+            const current = kit.flashcards || { items: [] };
+            const items = replace ? parsed : [...(current.items || []), ...parsed];
+            store.setKitFlashcards(kit.id, { ...current, items });
+            toast(`${parsed.length} card${parsed.length === 1 ? "" : "s"} added.`, "success");
+          },
+        });
+        break;
+      }
       case "edit-card": {
         const kit = store.getKit(route.id);
         if (!kit || !kit.flashcards) break;
@@ -4478,19 +4649,36 @@ Active transport is the movement of substances against a concentration gradient,
       case "quiz-choose": {
         if (quizState.status !== "running" || quizState.phase !== "answering") break;
         quizState.answers[quizState.index] = { choice: Number(actionEl.dataset.opt) };
+        saveQuizDraft();
         render();
         break;
       }
       case "quiz-next":
         quizNext();
         break;
+      case "resume-quiz": {
+        const draft = readQuizDraft(id || quizState.kitId || route.id);
+        if (!draft) {
+          toast("That quiz could not be restored.", "error");
+          break;
+        }
+        resumeQuiz(draft);
+        break;
+      }
+      case "discard-draft": {
+        clearQuizDraft();
+        toast("Unfinished quiz discarded.");
+        render();
+        break;
+      }
       case "quit-quiz": {
         openModal({
           title: "Leave this quiz?",
-          body: `<p>Your progress in this run is not saved until you submit the quiz on the last question.</p>`,
+          body: `<p>Your answers are kept on this device, so you can resume this run later from the quiz page.</p>`,
           confirmLabel: "Leave quiz",
-          danger: true,
+          cancelLabel: "Keep going",
           onConfirm: () => {
+            saveQuizDraft();
             resetQuiz(quizState.kitId);
             render();
           },
@@ -4559,6 +4747,7 @@ Active transport is the movement of substances against a concentration gradient,
     const field = event.target.closest("[data-quiz-input]");
     if (!field || quizState.status !== "running") return;
     quizState.answers[quizState.index] = { text: field.value };
+    saveQuizDraft();
     const next = els.view.querySelector('[data-action="quiz-next"]');
     if (next) next.disabled = !field.value.trim();
   }
@@ -4776,6 +4965,23 @@ Active transport is the movement of substances against a concentration gradient,
         if (event.key === "ArrowLeft") {
           event.preventDefault();
           moveCard(-1);
+          return;
+        }
+        // Rate straight from the keyboard once the answer is showing.
+        if (flashState.flipped && /^(1|k)$/i.test(event.key)) {
+          const known = els.view.querySelector('[data-action="card-known"]');
+          if (known) {
+            event.preventDefault();
+            known.click();
+          }
+          return;
+        }
+        if (flashState.flipped && /^(2|a)$/i.test(event.key)) {
+          const again = els.view.querySelector('[data-action="card-again"]');
+          if (again) {
+            event.preventDefault();
+            again.click();
+          }
           return;
         }
       }
