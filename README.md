@@ -1,24 +1,28 @@
 # StudyForge
 
-**Live app: <https://chibbit-99.github.io/Symus-Study/>** (the URL kept its old name)
+**Live app: <https://darrelx4739.github.io/StudyForge/>**
 
 A browser-only study workspace. Organise **classes → study kits → resources**, turn PDFs and pasted
-text into complete AI-written **study guides**, then revise with **flashcards**, a **quiz** and a
-**practice test**. Quiz attempts are saved so you can see yourself improve.
+text into complete **study guides**, then revise with **flashcards**, a **quiz** and a **practice
+test**. Quiz attempts are saved so you can watch yourself improve.
+
+**It works with zero setup.** Out of the box StudyForge writes guides, cards and questions with an
+on-device engine that runs in the tab — no account, no API key, no server. Adding an AI key in
+Settings is optional, and only there if you want richer, model-written material.
 
 No build step, no install, no server of your own. Your data stays in your browser.
 
 ## Using the hosted app
 
-The app is deployed to GitHub Pages at <https://chibbit-99.github.io/Symus-Study/> (repository name
-unchanged from before the StudyForge rebrand):
+Open <https://darrelx4739.github.io/StudyForge/> and start:
 
-1. Open the URL.
-2. Open **Settings** and paste your NVIDIA NIM API key (saved in that browser only).
-3. Create a class, then a study kit, then add a PDF or paste text.
+1. Click **Try a sample kit** to see a finished kit, or **New study kit** and add a PDF or paste notes.
+2. Study guide, flashcards and quiz are generated straight away on device.
+3. Optional: **Settings** adds an AI provider key (Gemini, OpenRouter, a self-hosted relay or NVIDIA
+   through the bundled Worker) for model-written study material and AI marking of short answers.
 
-Everything except the AI calls runs in the tab. Note requests go to the StudyForge Cloudflare Worker,
-which forwards them to NVIDIA NIM.
+Everything runs in the tab. The only network calls are optional AI requests, and the app keeps
+working offline once it has been opened (it is installable as an app).
 
 ### GitHub Pages deployment
 
@@ -43,7 +47,8 @@ shows the current build. Plain `python3 -m http.server` sends no cache headers, 
 browser keep serving an old `src/*.js` after you update the code — the page looks unchanged
 even though the files on disk are new.
 
-Open <http://localhost:8000>, open **Settings**, paste an NVIDIA NIM API key, and create a study kit.
+Open <http://localhost:8000> and create a study kit — no key needed. Add one in **Settings** only if
+you want AI-written material.
 
 **Confirming which build you are running:** every project file is requested with a `?v=` token
 (matched in `arch/config.json` and the fallback list in `index.html`), the startup log prints
@@ -55,7 +60,13 @@ hard-reload with Ctrl/Cmd-Shift-R. When releasing, bump the token in both places
 
 ### Interface
 
-A light, minimal layout with a grouped sidebar:
+A modern, responsive layout with a grouped sidebar:
+
+- **Engine chip** in the top bar always says where material comes from — *On-device engine*,
+  the AI provider name, or *key needed*. Click it to open Settings.
+- **Streak strip** on the dashboard shows consecutive study days and a 14-day activity heat strip,
+  driven by real actions (guides generated, cards rated, quizzes finished).
+- **Continue card** jumps straight back into the kit you last worked on.
 
 - **Sidebar** — *Overview* (Dashboard) and an expandable **Classes** tree: click a class to open its
   study kits, click a kit to open its four study modes — **Study guide**, **Flashcards**, **Quiz** and
@@ -72,6 +83,7 @@ A light, minimal layout with a grouped sidebar:
 
 ### Dashboard
 
+- **Try a sample kit** builds a complete Biology kit (guide, 8-question quiz, 12 cards) in one click.
 - **Study kits** hold resources. Each kit row shows the resource count as a large figure, its class,
   what has been generated (questions, cards, exam) and the last update.
 - **Classes** group kits (e.g. *Year 11 Biology*). Create, rename and delete classes; kits are moved
@@ -79,6 +91,8 @@ A light, minimal layout with a grouped sidebar:
 - **Rename** kits, edit their subject/focus, move them, delete them.
 - **Search** (⌘K / Ctrl-K) matches kit names, subjects and resource names.
 - **Export / Import** a JSON backup of everything.
+- **Shortcuts** (sidebar) or **?** lists every keyboard shortcut: ⌘K search, 1–4 answers,
+  Enter to mark, Space to flip, ←/→ cards.
 
 ### Study kit tabs
 
@@ -125,7 +139,8 @@ sections, each of which becomes part of one complete Markdown study document.
 ### Study documents
 
 - Rendered as Markdown, or edited in place (manual corrections are saved).
-- Copy or download as `.md`.
+- Table of contents generated from the headings, with jump links.
+- Copy, download as `.md`, or **Print** (prints the guide alone, not the app chrome).
 - The document is saved to `localStorage`; **the uploaded file and its raw extracted text are not**.
 
 ### Quiz (per study kit)
@@ -168,8 +183,10 @@ Consequences you will see in the questions tab:
 5. Every question must be answered and marked; the last **See result** button **submits** the quiz.
 6. The result screen shows the score, percentage, time taken and a full question-by-question review.
 7. **Every submitted attempt is saved** with this study kit (up to 50) and listed under
-   *Past attempts* with its score, date, time and best result. Regenerating the questions keeps the
-   history.
+   *Past attempts* with its score, date, time and best result. **Review** reopens any past attempt to
+   show your answer beside the model answer, question by question. Regenerating the questions keeps
+   the history.
+8. **Practise missed** starts a fresh run containing only the questions you got wrong last time.
 
 ### Flashcards (per study kit)
 
@@ -191,6 +208,10 @@ merged, de-duplicated by prompt and interleaved so the deck is not grouped by re
 - **Shuffle** randomises the order, **Restart** returns to the first card, **Browse all** switches to a
   plain list, and the deck can be downloaded as Markdown.
 - Progress (card *n* of *N*, cards known, cards to review) is shown above the card.
+- **Spaced review** is automatic. "Got it" schedules the card further out (3 days, then longer, up to
+  30); "Still learning" brings it back in ten minutes. Ratings are saved per card, keyed by its
+  prompt, so regenerating a deck keeps your progress. **Review N due** starts a session with only the
+  cards that are due, and **Reset progress** clears the schedule.
 
 ### Practice test (per study kit)
 
@@ -207,27 +228,39 @@ The same material as the quiz, but as a **timed paper**:
   highlighted plus the explanation. **Retake** reuses the questions with a fresh clock; the last score
   is remembered on the exam's front page.
 
-## Choosing the model
+## Choosing the engine
 
-**Settings → Model** picks which NVIDIA NIM model writes your documents and questions.
+**On-device (default).** `src/local.js` is a dependency-free generator: it reads the extracted text,
+finds definitions, key sentences and cloze-worthy terms, then writes a Markdown study guide,
+vocabulary cards, multiple-choice and short-answer questions, and an exam paper. It needs no key, no
+network and no model, and it is what runs until you add one.
 
-- The list comes from the StudyForge Worker: `GET /api/models` asks NVIDIA which models your API key can
-  see, then keeps only the supported families.
-- A model is offered only if its id contains **deepseek**, **step**, **nemotron**, **mistral**,
-  **gemma**, **glm** or **muse**. The same rule is enforced in the Worker when a request is made, so
-  a model outside those families is rejected even if the UI is bypassed.
-- **Load available models** refreshes the list using the key currently typed in Settings. Failures
-  (bad key, offline) are shown in the dialog and your saved model is kept.
-- **Custom model id…** lets you type an id by hand, for a model that is not in the catalogue yet.
-- The default is `nvidia/nemotron-3.5-lightning-30b-a3b`. The choice is stored in `localStorage` and
-  applies to all later document and question requests; existing documents are unaffected.
+**AI (optional).** Open **Settings** and pick a provider:
+
+| Provider | What you need | Endpoint used |
+| --- | --- | --- |
+| Google Gemini | A Gemini API key | `generativelanguage.googleapis.com/v1beta/models/<model>:generateContent` |
+| OpenRouter | An OpenRouter key | `openrouter.ai/api/v1/chat/completions` |
+| NVIDIA (Worker) | An NVIDIA NIM key; requests go through the bundled Worker for CORS | `…workers.dev/api/notes` |
+| Custom relay | Any OpenAI-compatible base URL + key | `<baseUrl>/chat/completions` |
+
+Each provider keeps its own key, so switching back and forth never overwrites one. **Load models**
+lists what the key can use, **Test connection** sends a tiny request and reports the result, and any
+model id can be typed in by hand.
+
+NVIDIA's API sends no CORS headers, so a browser cannot call it directly; that is the only reason
+the Worker exists. Everything else calls the provider straight from the tab.
+
+Short answers are marked **by AI when a key is present**, comparing meaning rather than wording. With
+no key — or if the call fails — the on-device marker compares the key ideas in your answer with the
+model answer (accepting paraphrases and word-form changes) and labels the result as offline marking.
 
 ## Data and privacy
 
 | Data | Where it lives |
 | --- | --- |
 | Classes, kits, resources, documents, questions, quiz attempts | `localStorage` under `studyforge.study.v1` (questions and attempts live on the kit; data saved as `symus.study.v1` is migrated on load) |
-| NVIDIA NIM API key | `localStorage` (same key), sent only with your requests |
+| Provider API key(s) | `localStorage` (same object), one per provider, sent only with your requests |
 | Uploaded PDFs and their raw extracted text | memory only, discarded when processing ends |
 | Generated documents / questions | `localStorage` — use **Export** regularly |
 
@@ -235,15 +268,16 @@ The API key is saved in this browser so you do not have to paste it every sessio
 to this browser profile can read it; use **Settings → Delete all data** to clear everything, and never
 use a shared machine with a billable key.
 
-Note requests go to the StudyForge Cloudflare Worker, which forwards them to NVIDIA and does not store the
-key:
+With the on-device engine there are **no network requests at all**. If you add an AI provider, the
+request goes from your browser to that provider (or, for NVIDIA, through the bundled Worker, which
+forwards it and does not store the key):
 
 ```
 browser → https://symus-backend.chibbit99.workers.dev/api/notes → https://integrate.api.nvidia.com/v1/chat/completions
 ```
 
-Model: `nvidia/nemotron-3.5-lightning-30b-a3b`. Its strongest languages are English, Spanish, French,
-German, Italian and Japanese.
+Default NVIDIA model: `nvidia/nemotron-3.5-lightning-30b-a3b`. Its strongest languages are English,
+Spanish, French, German, Italian and Japanese.
 
 `localStorage` holds roughly 5 MB. The sidebar shows usage; if it fills up, **Export** a backup and
 delete old resources.
@@ -280,17 +314,23 @@ src/*.js              application code executed by ARCH.js
 | `index.html` | App shell, styles, ARCH.js runtime tag and fallback loader. |
 | `arch/config.json` | ARCH.js modules and the ordered project file list. |
 | `arch/init.js` | Exports `STUDYFORGE_CONFIG` (model, worker URL). |
-| `src/store.js` | localStorage data model: classes, kits, resources, quiz attempts, settings, backup/restore. |
+| `src/local.js` | On-device study engine: text analysis, definitions, guide, cards, questions and exams with no key. |
+| `src/store.js` | localStorage data model: classes, kits, resources, quiz attempts, card ratings, activity/streak, settings, backup/restore. |
 | `src/markdown.js` | Small, safe Markdown renderer (HTML escaped, safe links only). |
 | `src/ocr.js` | PDF.js text-layer extraction, Tesseract OCR of selected pages, text reconstruction. |
-| `src/ai.js` | NIM client: gap analysis, document generation, questions, flashcards, exam papers, short-answer marking, allocation, retries. |
+| `src/ai.js` | Multi-provider client (Gemini, OpenRouter, NVIDIA Worker, custom relay): gap analysis, generation, short-answer marking, retries, offline marking fallback. |
 | `src/jobs.js` | Sequential job queue and the extraction pipeline. |
 | `src/ui.js` | Dashboard, sidebar tree, kit and resource views, quiz run + result screens, flashcard player, modals, toasts, job bar. |
 | `src/main.js` | Boot. |
-| `worker.js` | Cloudflare Worker proxying `/api/notes` to NVIDIA NIM. |
+| `worker.js` | Optional Cloudflare Worker proxying `/api/notes` to NVIDIA NIM (only needed for NVIDIA). |
+| `sw.js` | Service worker: installable app, offline app shell. |
+| `manifest.webmanifest`, `icon.svg` | PWA metadata and app icon. |
 | `wrangler.toml` | Worker configuration. |
 
-## Deploying the Worker
+## Deploying the Worker (optional)
+
+The Worker is only needed for the NVIDIA provider. Everything else — including the default
+on-device engine — works without it, so you can ignore this section entirely.
 
 ```bash
 npx wrangler deploy
@@ -332,7 +372,11 @@ The Worker never stores or logs the key — it forwards the caller's `Authorizat
   need a re-run.
 - Long resources are split into sections, so cross-section connections can be weaker. If a section hits
   the output-token limit the resource status says which part may be short.
-- AI output can be wrong or can miss nuance: check it against the source before revising from it.
+- AI output can be wrong or can miss nuance: check it against the source before revising from it. The
+  on-device engine is deliberately conservative — it only reuses sentences and definitions that are
+  in your notes — but it is a summariser, not a tutor.
+- On-device generation cannot invent explanations or mark free text semantically; it compares key
+  ideas. Add an AI key for richer material and fuller marking.
 - Kits with many resources mean one model request per resource, so generating a large set takes
   proportionally longer — a 40-card deck or a 30-question exam across five resources is ten requests.
 - An exam run lives in memory: reloading the page or closing the tab abandons it (the saved paper and
@@ -340,8 +384,8 @@ The Worker never stores or logs the key — it forwards the caller's `Authorizat
   attempt is saved.
 - AI marking of short answers is a judgement call: it accepts different wordings, but can occasionally
   be generous or strict. The model answer is always shown for you to check.
-- Available models depend on your NVIDIA account and the Worker's family filter. If one is missing,
-  check **Settings → Model → Load available models** and `SYMUS_MODEL_FILTER` on the Worker.
+- Available models depend on your provider account (and, for NVIDIA, the Worker's family filter). If
+  one is missing, check **Settings → Load models** and `SYMUS_MODEL_FILTER` on the Worker.
 - Not exhaustively tested in every browser; it relies on modern ES2022 features.
 
 ## Dependencies

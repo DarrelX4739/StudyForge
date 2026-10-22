@@ -497,6 +497,36 @@
     const seen = new Set();
 
     const allAnswers = [...new Set([...definitions.map((entry) => entry.term), ...cloze.map((item) => item.answer)])];
+    // Distractor pool: the answers themselves plus the document's content words,
+    // so a short document still yields four-choice questions.
+    // Plausible nouns for distractors: words that follow a determiner, plus words
+    // capitalised mid-sentence. Verbs and filler make weak wrong answers.
+    const nounish = new Set();
+    const plain = plainText(text);
+    for (const match of plain.matchAll(/\b(?:the|a|an|of|into|from|across|inside)\s+([a-z]{4,})\b/gi)) {
+      const word = match[1].toLowerCase();
+      if (!STOPWORDS.has(word)) nounish.add(word);
+    }
+    for (const match of plain.matchAll(/(?<![.!?]\s)\b([A-Z][a-z]{3,})\b/g)) {
+      nounish.add(match[1].toLowerCase());
+    }
+    const WEAK_DISTRACTORS = new Set([
+      "process", "region", "special", "green", "movement", "action", "thing", "part", "type", "form",
+      "number", "amount", "level", "system", "work", "way", "kind", "group", "place", "time", "change",
+      "result", "fact", "idea", "method", "example", "case", "position", "condition", "state", "order",
+    ]);
+    // Skip half of a multi-word term ("Cellular" out of "Cellular respiration").
+    const termHeads = new Set(
+      allAnswers
+        .filter((answer) => answer.includes(" "))
+        .map((answer) => answer.split(/\s+/)[0].toLowerCase()),
+    );
+    const contentPool = [...nounish]
+      .filter((word) => !WEAK_DISTRACTORS.has(word) && !termHeads.has(word))
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1));
+    const distractorPool = [...new Set([...allAnswers, ...contentPool])];
+    // One question per answer term keeps the set from asking the same fact twice.
+    const usedAnswers = new Set();
 
     const addQuestion = (question) => {
       const key = question.question.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 80);
@@ -506,19 +536,37 @@
     };
 
     const makeMcq = (item) => {
-      const distractors = seededShuffle(
-        allAnswers.filter((answer) => answer.toLowerCase() !== item.answer.toLowerCase()),
-        hash(item.answer) + questions.length,
-      )
+      const target = String(item.answer).toLowerCase();
+      if (usedAnswers.has(target)) return null;
+      const promptWords = new Set(item.prompt.toLowerCase().split(/[^a-z0-9]+/));
+      const candidates = distractorPool.filter(
+        (answer) =>
+          answer.toLowerCase() !== target &&
+          // A word already visible in the sentence would be a giveaway.
+          !promptWords.has(answer.toLowerCase()),
+      );
+      let distractors = seededShuffle(candidates, hash(item.answer) + questions.length)
         .filter((answer) => Math.abs(answer.length - item.answer.length) < item.answer.length + 12)
         .slice(0, 3);
+      if (distractors.length < 3) {
+        // Loosen the length rule rather than shipping a three-option question.
+        distractors = seededShuffle(candidates, hash(item.answer) + questions.length)
+          .filter((answer) => !distractors.includes(answer))
+          .slice(0, 3 - distractors.length)
+          .concat(distractors);
+      }
       if (distractors.length < 2) return null;
-      const options = seededShuffle([item.answer, ...distractors], hash(item.prompt));
+      usedAnswers.add(target);
+      const options = seededShuffle([item.answer, ...distractors], hash(item.prompt)).map(
+        (option) => option.charAt(0).toUpperCase() + option.slice(1),
+      );
       return {
         type: "mcq",
         question: `Which term completes this statement? “${item.prompt}”`,
         options,
-        answerIndex: options.findIndex((option) => option === item.answer),
+        answerIndex: options.findIndex(
+          (option) => option.toLowerCase() === String(item.answer).toLowerCase(),
+        ),
         answer: "",
         explanation: item.sentence,
       };
@@ -555,42 +603,67 @@
       }
     }
 
-    // Short answers for the rest.
+    // Short answers for the rest. A term already tested by an MCQ is held back
+    // so the set does not ask the same fact twice — it is only reused at the end
+    // if there is not enough distinct material for the requested count.
     if (!examOnly) {
+      const deferred = [];
+      const offer = (question, answer) => {
+        if (usedAnswers.has(answer)) deferred.push({ question, used: answer });
+        else {
+          usedAnswers.add(answer);
+          addQuestion(question);
+        }
+      };
+
       for (const entry of definitions) {
         if (questions.length >= total) break;
-        addQuestion({
-          type: "short",
-          question: `Explain “${entry.term}” in your own words.`,
-          options: [],
-          answerIndex: 0,
-          answer: entry.definition,
-          explanation: entry.term,
-        });
+        offer(
+          {
+            type: "short",
+            question: `Explain “${entry.term}” in your own words.`,
+            options: [],
+            answerIndex: 0,
+            answer: entry.definition,
+            explanation: entry.term,
+          },
+          entry.term.toLowerCase(),
+        );
       }
       for (const item of cloze) {
         if (questions.length >= total) break;
-        addQuestion({
-          type: "short",
-          question: "Complete the idea: " + item.prompt,
-          options: [],
-          answerIndex: 0,
-          answer: item.answer,
-          explanation: item.sentence,
-        });
+        offer(
+          {
+            type: "short",
+            question: "Complete the idea: " + item.prompt,
+            options: [],
+            answerIndex: 0,
+            answer: item.answer,
+            explanation: item.sentence,
+          },
+          String(item.answer).toLowerCase(),
+        );
       }
       for (const sentence of keySentences(text, total)) {
         if (questions.length >= total) break;
         const subject = sentence.match(/^([A-Z][\w'’\- ]{2,40}?)\s+(?:is|are|was|were|can|has|does)\s/i);
         if (!subject) continue;
-        addQuestion({
-          type: "short",
-          question: `What does the material say about ${subject[1].toLowerCase()}?`,
-          options: [],
-          answerIndex: 0,
-          answer: sentence,
-          explanation: "",
-        });
+        offer(
+          {
+            type: "short",
+            question: `What does the material say about ${subject[1].toLowerCase()}?`,
+            options: [],
+            answerIndex: 0,
+            answer: sentence,
+            explanation: "",
+          },
+          subject[1].toLowerCase(),
+        );
+      }
+
+      for (const entry of deferred) {
+        if (questions.length >= total) break;
+        addQuestion(entry.question);
       }
     }
 

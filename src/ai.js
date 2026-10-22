@@ -828,6 +828,11 @@
   ]);
 
   /** Content words of an answer, used for the offline fallback marker. */
+  /**
+   * Content words of a sentence, crudely stemmed. Used for on-device
+   * short-answer marking, where we can only compare wording — so we lean towards
+   * accepting anything that shares the key ideas.
+   */
   function keywords(text) {
     return new Set(
       String(text || "")
@@ -835,8 +840,26 @@
         .replace(/[^a-z0-9\s'-]/g, " ")
         .split(/\s+/)
         .filter((word) => word.length > 2 && !MARK_STOPWORDS.has(word))
-        .map((word) => word.replace(/(ing|ed|es|s)$/, "")),
+        .map((word) =>
+          word
+            .replace(/['’]s$/, "")
+            .replace(/(ations|ation|ments|ment|ness|ities|ity|ies|ing|ed|ly|es|s)$/, ""),
+        )
+        .filter((word) => word.length > 2),
     );
+  }
+
+  /** Two words count as the same idea when one is a prefix of the other. */
+  function wordsMatch(a, b) {
+    if (a === b) return true;
+    const short = a.length <= b.length ? a : b;
+    const long = short === a ? b : a;
+    return short.length >= 4 && long.startsWith(short);
+  }
+
+  function coversIdea(given, idea) {
+    for (const word of given) if (wordsMatch(word, idea)) return true;
+    return false;
   }
 
   /**
@@ -845,15 +868,25 @@
    * overlap with the key ideas of the model answer.
    */
   function localGradeShortAnswer({ answer, response }) {
-    const expected = keywords(answer);
-    const given = keywords(response);
     const cleaned = (value) =>
       String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const text = String(response || "").trim();
 
-    if (cleaned(response) && cleaned(response) === cleaned(answer)) {
+    if (cleaned(text) && cleaned(text) === cleaned(answer)) {
       return { score: 1, correct: true, feedback: "Exact match with the model answer.", markedBy: "offline" };
     }
-    if (!expected.size) {
+
+    if (cleaned(text).split(" ").filter(Boolean).length < 2) {
+      return {
+        score: 0.1,
+        correct: false,
+        feedback: "That is too short to mark — write at least a sentence in your own words.",
+        markedBy: "offline",
+      };
+    }
+
+    const expected = [...keywords(answer)];
+    if (!expected.length) {
       return {
         score: 0,
         correct: false,
@@ -861,16 +894,25 @@
         markedBy: "offline",
       };
     }
-    let hits = 0;
-    for (const word of expected) if (given.has(word)) hits += 1;
-    const score = hits / expected.size;
-    const correct = score >= 0.55;
+
+    const given = keywords(text);
+    const missing = expected.filter((idea) => !coversIdea(given, idea));
+    const hits = expected.length - missing.length;
+    // Coverage of the model answer's ideas, with a small bonus for adding detail.
+    const coverage = hits / expected.length;
+    const extra = [...given].filter((word) => !expected.some((idea) => wordsMatch(word, idea))).length;
+    const score = Math.max(0, Math.min(1, coverage + Math.min(0.15, extra * 0.02)));
+    const correct = coverage >= 0.55;
+    const missingList = missing.slice(0, 4).join(", ");
+
     return {
       score,
       correct,
       feedback: correct
-        ? `Covers the key idea (${Math.round(score * 100)}% of the key terms). Add your AI key for a fuller review.`
-        : `Missing key ideas from the model answer (${Math.round(score * 100)}% of key terms matched). Add your AI key for a fuller review.`,
+        ? `Covers ${Math.round(coverage * 100)}% of the key ideas. Add your AI key for a fuller review.`
+        : `Matches ${Math.round(coverage * 100)}% of the key ideas${
+            missingList ? ` — missing: ${missingList}` : ""
+          }. Add your AI key for a fuller review.`,
       markedBy: "offline",
     };
   }

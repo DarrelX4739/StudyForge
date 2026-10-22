@@ -1823,9 +1823,40 @@ Active transport is the movement of substances against a concentration gradient,
     }, 4200);
   }
 
+  /** Where focus was before the dialog opened, so it can be put back. */
+  let modalReturnFocus = null;
+
   function closeModal() {
     els.modalRoot.innerHTML = "";
     els.modalRoot.hidden = true;
+    if (modalReturnFocus && document.contains(modalReturnFocus)) {
+      try {
+        modalReturnFocus.focus({ preventScroll: true });
+      } catch (error) {
+        /* the element may be gone */
+      }
+    }
+    modalReturnFocus = null;
+  }
+
+  /** Keep Tab inside an open dialog. */
+  function trapModalFocus(event) {
+    if (els.modalRoot.hidden || event.key !== "Tab") return;
+    const focusable = [
+      ...els.modalRoot.querySelectorAll(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ),
+    ].filter((el) => el.offsetParent !== null || el === document.activeElement);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
   }
 
   /**
@@ -1833,6 +1864,7 @@ Active transport is the movement of substances against a concentration gradient,
    *          onConfirm?:Function, onMount?:Function}} options
    */
   function openModal(options) {
+    modalReturnFocus = document.activeElement;
     els.modalRoot.hidden = false;
     els.modalRoot.innerHTML = `
       <div class="modal-backdrop" data-close></div>
@@ -1856,7 +1888,14 @@ Active transport is the movement of substances against a concentration gradient,
     });
     if (options.onMount) options.onMount(els.modalRoot);
     const firstField = els.modalRoot.querySelector("input, textarea, select");
-    if (firstField) setTimeout(() => firstField.focus(), 30);
+    const dialog = els.modalRoot.querySelector(".modal");
+    setTimeout(() => {
+      if (firstField) firstField.focus();
+      else if (dialog) {
+        dialog.setAttribute("tabindex", "-1");
+        dialog.focus();
+      }
+    }, 30);
   }
 
   function confirmDialog(title, message, confirmLabel = "Delete") {
@@ -3694,6 +3733,7 @@ Active transport is the movement of substances against a concentration gradient,
 
     els.modalRoot.addEventListener("keydown", (event) => {
       if (event.key === "Escape") closeModal();
+      trapModalFocus(event);
       if (event.key === "Enter" && event.target.tagName === "INPUT") {
         const confirm = els.modalRoot.querySelector("[data-confirm]");
         if (confirm) confirm.click();
