@@ -85,6 +85,9 @@
     known: {},
     again: {},
     shuffled: false,
+    typing: false,
+    typed: "",
+    typedVerdict: null,
     lastScheduled: null,
   };
   // Which classes / kits are open in the sidebar tree.
@@ -93,6 +96,8 @@
   // Timed exam session. Lives in memory only: reloading the page abandons a run.
   let examState = { kitId: null, status: "idle", answers: {}, startedAt: 0, endsAt: 0, secondsUsed: 0 };
   let renderQueued = false;
+  // Where the reader was in each study guide, so coming back lands in the same place.
+  const docScroll = {};
   let pendingReprocessId = null;
   let lastQuizKey = null;
   // Cached model catalogue for the Settings selector (per page load).
@@ -203,6 +208,9 @@
       dueOnly: false,
       hardMode: false,
       hardList: null,
+      typing: false,
+      typed: "",
+      typedVerdict: null,
       lastScheduled: null,
     };
   }
@@ -457,9 +465,25 @@
     }
 
     restoreDrafts(snapshot);
+    restoreDocScroll();
     renderSidebar();
     renderStorage();
     renderProviderBadge();
+  }
+
+  /** Guides remember the reader's place per document. */
+  function restoreDocScroll() {
+    if (route.name !== "kit" || route.tab !== "documents") return;
+    const panel = els.view.querySelector("[data-doc-body]");
+    if (!panel) return;
+    const key = `${route.id}:${docViewId || "first"}`;
+    const saved = docScroll[key];
+    if (!saved || saved < 40) return;
+    try {
+      window.scrollTo(0, saved);
+    } catch (error) {
+      /* fine in tests */
+    }
   }
 
   function renderMissing(message) {
@@ -1992,6 +2016,70 @@ Active transport is the movement of substances against a concentration gradient,
       </section>`;
   }
 
+  /** Words that carry no meaning for a typed-answer check. */
+  const TYPING_STOPWORDS = new Set(
+    "a an the of to and or in on at for with from by is are was were be been being that this these those it its as into than then so such".split(
+      " ",
+    ),
+  );
+
+  /** Loose comparison so a typed answer only has to mean the same thing. */
+  function compareTyped(expected, given) {
+    const clean = (text) =>
+      String(text || "")
+        .toLowerCase()
+        .replace(/[’']/g, "")
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    const want = clean(expected);
+    const got = clean(given);
+    if (!got) return { verdict: "empty", ratio: 0 };
+    if (want === got) return { verdict: "correct", ratio: 1 };
+    if (want.length < 24 && (want.includes(got) || got.includes(want))) {
+      return { verdict: got.length >= want.length * 0.6 ? "correct" : "close", ratio: 0.9 };
+    }
+    const wantWords = want.split(" ").filter((word) => word.length > 2 && !TYPING_STOPWORDS.has(word));
+    if (!wantWords.length) return { verdict: want === got ? "correct" : "close", ratio: 0.5 };
+    const givenSet = new Set(got.split(" "));
+    const hits = wantWords.filter((word) => givenSet.has(word)).length;
+    const ratio = hits / wantWords.length;
+    return { verdict: ratio >= 0.6 ? "correct" : ratio >= 0.3 ? "close" : "wrong", ratio };
+  }
+
+  function typingStage(card, frontLabel, backLabel) {
+    const verdict = flashState.typedVerdict;
+    const message = verdict
+      ? verdict.verdict === "correct"
+        ? "That matches — nice recall."
+        : verdict.verdict === "close"
+          ? "Close. Compare with the card and rate yourself honestly."
+          : "Not quite. Read the answer, then rate it honestly."
+      : "";
+    return `
+      <div class="fc-stage">
+        <div class="fc-typing">
+          <span class="fc-side">${frontLabel}</span>
+          <p class="fc-text">${esc(card.front)}</p>
+          <label class="sr-only" for="card-typed">Your answer</label>
+          <textarea id="card-typed" class="type-input" data-card-typed rows="3"
+            placeholder="Type the ${backLabel.toLowerCase()} from memory…">${esc(flashState.typed)}</textarea>
+          <div class="row tight">
+            <button class="btn primary small" data-action="card-check-typed">Check</button>
+            <button class="btn small ghost" data-action="toggle-typing">Back to flipping</button>
+          </div>
+          ${
+            verdict
+              ? `<div class="typed-verdict ${verdict.verdict}">
+                   <p>${esc(message)}</p>
+                   <p class="typed-answer"><span class="fc-side">${backLabel}</span> ${esc(card.back)}</p>
+                 </div>`
+              : ""
+          }
+        </div>
+      </div>`;
+  }
+
   function renderDeckEmpty(documentCount) {
     if (!documentCount) return "";
     return `<p class="muted small">No flashcards yet. Generate a deck and it will be saved with this study kit.</p>`;
@@ -2091,7 +2179,10 @@ Active transport is the movement of substances against a concentration gradient,
           }
         </p>
 
-        <div class="fc-stage">
+        ${
+          flashState.typing
+            ? typingStage(card, frontLabel, backLabel)
+            : `<div class="fc-stage">
           <button class="flashcard ${flashState.flipped ? "is-flipped" : ""}" data-action="flip-card"
             aria-label="Flashcard — click to flip" aria-pressed="${flashState.flipped}">
             <span class="fc-inner">
@@ -2107,16 +2198,21 @@ Active transport is the movement of substances against a concentration gradient,
               </span>
             </span>
           </button>
-        </div>
+        </div>`
+        }
 
         ${card.source ? `<p class="muted tiny center">From ${esc(card.source)}</p>` : ""}
 
         <div class="fc-controls">
           <button class="icon-btn" data-action="prev-card" title="Previous card" aria-label="Previous card"
             ${position === 0 ? "disabled" : ""}>${icon("arrowLeft")}</button>
-          <button class="btn small primary fc-flip-btn" data-action="flip-card">
+          ${
+            flashState.typing
+              ? ""
+              : `<button class="btn small primary fc-flip-btn" data-action="flip-card">
             <span data-flip-label>${flashState.flipped ? "Show prompt" : "Show answer"}</span>
-          </button>
+          </button>`
+          }
           <button class="icon-btn" data-action="next-card" title="Next card" aria-label="Next card"
             ${position >= order.length - 1 ? "disabled" : ""}>${icon("arrowRight")}</button>
         </div>
@@ -2149,6 +2245,9 @@ Active transport is the movement of substances against a concentration gradient,
               ? `<button class="btn small ghost" data-action="review-hardest">Hardest (${hardestCards(kit).length})</button>`
               : ""
           }
+          <button class="btn small ghost" data-action="toggle-typing">${
+            flashState.typing ? "Flip mode" : "Type answers"
+          }</button>
           <button class="btn small ghost" data-action="shuffle-cards">Shuffle</button>
           <button class="btn small ghost" data-action="deck-list">${
             flashState.showList ? "Back to card" : "Browse all"
@@ -3444,6 +3543,8 @@ Active transport is the movement of substances against a concentration gradient,
     const next = Math.min(order.length - 1, Math.max(0, flashState.index + step));
     flashState.index = next;
     flashState.flipped = false;
+    flashState.typed = "";
+    flashState.typedVerdict = null;
     render();
   }
 
@@ -3465,6 +3566,8 @@ Active transport is the movement of substances against a concentration gradient,
       flashState.again[cardIndex] = true;
       delete flashState.known[cardIndex];
     }
+    flashState.typed = "";
+    flashState.typedVerdict = null;
     if (flashState.index < order.length - 1) {
       flashState.index += 1;
       flashState.flipped = false;
@@ -3534,6 +3637,7 @@ Active transport is the movement of substances against a concentration gradient,
       toast("Generate a quiz first.", "error");
       return;
     }
+    clearQuizDraft();
     quizState = {
       kitId: kit.id,
       status: "running",
@@ -3904,6 +4008,7 @@ Active transport is the movement of substances against a concentration gradient,
         const count = Number(root.querySelector("#quiz-count").value);
         const difficulty = root.querySelector("#quiz-level").value;
         resetQuiz(kit.id);
+        clearQuizDraft();
         jobs.makeQuiz(kit, count, difficulty);
         toast("Generating quiz questions…");
       },
@@ -4643,6 +4748,29 @@ Active transport is the movement of substances against a concentration gradient,
         toast("Reviewing the cards you are still learning.");
         break;
       }
+      case "toggle-typing": {
+        flashState.typing = !flashState.typing;
+        flashState.typed = "";
+        flashState.typedVerdict = null;
+        flashState.flipped = false;
+        render();
+        toast(flashState.typing ? "Type the answer, then check it." : "Back to flipping cards.");
+        break;
+      }
+      case "card-check-typed": {
+        const kit = store.getKit(route.id);
+        const field = els.view.querySelector("[data-card-typed]");
+        if (!kit || !field) break;
+        const order = deckOrder(kit);
+        const card = kit.flashcards.items[order[flashState.index]];
+        if (!card) break;
+        flashState.typed = field.value;
+        flashState.typedVerdict = compareTyped(card.back, field.value);
+        render();
+        const next = els.view.querySelector("[data-card-typed]");
+        if (next) next.focus();
+        break;
+      }
       case "shuffle-cards":
         shuffleDeck();
         break;
@@ -4777,7 +4905,14 @@ Active transport is the movement of substances against a concentration gradient,
       }
       case "select-doc":
         docViewId = id;
+        // A different document starts at the top, not where the last one ended.
+        delete docScroll[`${route.id}:${id}`];
         render();
+        try {
+          window.scrollTo(0, 0);
+        } catch (error) {
+          /* fine */
+        }
         break;
       case "toc-jump": {
         const body = els.view.querySelector("[data-doc-body]");
@@ -4921,15 +5056,21 @@ Active transport is the movement of substances against a concentration gradient,
 
   /** Keep short-answer text in state as it is typed, and gate the Next button. */
   /** Persist the kit scratch pad and refresh its word count. */
-  let notesTimer = null;
+  // One timer per kit: switching kits mid-edit must not drop the first one's text.
+  const notesTimers = new Map();
   function notesAutosave(kitId, value) {
     if (!kitId) return;
-    if (notesTimer) clearTimeout(notesTimer);
-    notesTimer = setTimeout(() => {
-      store.updateKit(kitId, { notes: value });
-      const status = els.view.querySelector("[data-notes-status]");
-      if (status) status.textContent = "Saved automatically.";
-    }, 900);
+    const existing = notesTimers.get(kitId);
+    if (existing) clearTimeout(existing);
+    notesTimers.set(
+      kitId,
+      setTimeout(() => {
+        notesTimers.delete(kitId);
+        store.updateKit(kitId, { notes: value });
+        const status = els.view.querySelector("[data-notes-status]");
+        if (status) status.textContent = "Saved automatically.";
+      }, 900),
+    );
   }
 
   function saveKitNotes(kitId) {
@@ -5159,6 +5300,21 @@ Active transport is the movement of substances against a concentration gradient,
       lastSeenJob = current;
     });
 
+    // Remember how far down a guide the reader is (cheap, throttled by rAF).
+    let scrollTick = 0;
+    window.addEventListener(
+      "scroll",
+      () => {
+        if (scrollTick) return;
+        scrollTick = requestAnimationFrame(() => {
+          scrollTick = 0;
+          if (route.name !== "kit" || route.tab !== "documents") return;
+          docScroll[`${route.id}:${docViewId || "first"}`] = window.scrollY || 0;
+        });
+      },
+      { passive: true },
+    );
+
     document.addEventListener("click", (event) => {
       if (!event.target.closest || !event.target.closest("[data-skip-link]")) return;
       event.preventDefault();
@@ -5169,6 +5325,18 @@ Active transport is the movement of substances against a concentration gradient,
       // Flashcard deck: Space flips, arrows walk the deck — unless the user is
       // typing somewhere or a dialog is open.
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName);
+      // Typing mode: Enter checks the answer instead of flipping.
+      if (
+        event.target.matches &&
+        event.target.matches("[data-card-typed]") &&
+        event.key === "Enter" &&
+        !event.shiftKey
+      ) {
+        event.preventDefault();
+        const check = els.view.querySelector('[data-action="card-check-typed"]');
+        if (check) check.click();
+        return;
+      }
       if (
         route.name === "kit" &&
         route.tab === "flashcards" &&

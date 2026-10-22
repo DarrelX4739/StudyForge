@@ -856,6 +856,28 @@
   .backup-nudge{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 12px}
   .backup-nudge .btn{margin-left:auto}
 
+  /* Typed-recall mode */
+  .fc-typing{display:flex;flex-direction:column;gap:10px;align-items:center;text-align:center;max-width:520px;margin:0 auto}
+  .fc-typing .fc-text{font-size:1.35rem;font-weight:600;line-height:1.35;margin:2px 0 6px}
+  .type-input{
+    width:100%;padding:12px 14px;border-radius:var(--r-2);border:1px solid var(--line);
+    background:var(--panel);color:var(--text);font:inherit;resize:vertical;
+  }
+  .type-input:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 18%,transparent)}
+  .typed-verdict{
+    width:100%;text-align:left;padding:12px 14px;border-radius:var(--r-2);
+    border:1px solid var(--line);background:var(--panel-2,var(--panel));
+  }
+  .typed-verdict.correct{border-color:color-mix(in srgb,var(--good) 55%,transparent);background:color-mix(in srgb,var(--good) 10%,var(--panel))}
+  .typed-verdict.close{border-color:color-mix(in srgb,var(--accent) 45%,transparent);background:color-mix(in srgb,var(--accent) 8%,var(--panel))}
+  .typed-verdict.wrong{border-color:color-mix(in srgb,var(--danger) 45%,transparent);background:color-mix(in srgb,var(--danger) 8%,var(--panel))}
+  .typed-verdict p{margin:0 0 6px;font-size:.9rem}
+  .typed-verdict .typed-answer{margin:0;font-size:.95rem}
+  .sr-only{
+    position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+    clip:rect(0,0,0,0);white-space:nowrap;border:0;
+  }
+
   /* Exam question palette */
   .exam-palette{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 14px}
   .palette-dot{
@@ -1241,14 +1263,14 @@
       done = true;
       console.warn("[StudyForge] " + reason + "; loading the project files directly.");
       [
-        "./src/store.js?v=2026-10-22m",
-        "./src/local.js?v=2026-10-22m",
-        "./src/markdown.js?v=2026-10-22m",
-        "./src/ocr.js?v=2026-10-22m",
-        "./src/ai.js?v=2026-10-22m",
-        "./src/jobs.js?v=2026-10-22m",
-        "./src/ui.js?v=2026-10-22m",
-        "./src/main.js?v=2026-10-22m",
+        "./src/store.js?v=2026-10-22n",
+        "./src/local.js?v=2026-10-22n",
+        "./src/markdown.js?v=2026-10-22n",
+        "./src/ocr.js?v=2026-10-22n",
+        "./src/ai.js?v=2026-10-22n",
+        "./src/jobs.js?v=2026-10-22n",
+        "./src/ui.js?v=2026-10-22n",
+        "./src/main.js?v=2026-10-22n",
       ].forEach(function (src) {
         var script = document.createElement("script");
         script.src = src;

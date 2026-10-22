@@ -301,6 +301,36 @@ const modal = () => window.document.getElementById("modal-root");
   const ratedAfter = Object.keys(store.getKit(kit.id).flashcards.ratings || {}).length;
   check("K rates the current card", ratedAfter >= ratedBefore, `${ratedBefore} -> ${ratedAfter}`);
 
+  // ---------- typed recall ----------
+  window.location.hash = `#/kit/${kit.id}/flashcards`;
+  await wait(160);
+  const typeToggle = view().querySelector('[data-action="toggle-typing"]');
+  check("deck offers a typing mode", Boolean(typeToggle));
+  if (typeToggle) {
+    typeToggle.click();
+    await wait(150);
+    const box = view().querySelector("[data-card-typed]");
+    check("typing mode shows an answer box", Boolean(box));
+    const expected = store.getKit(kit.id).flashcards.items.find(
+      (card) => card.front === view().querySelector(".fc-typing .fc-text").textContent.trim(),
+    );
+    const checkBtn = view().querySelector('[data-action="card-check-typed"]');
+    // A generic answer should be marked wrong, the real one right.
+    box.value = "something completely unrelated";
+    box.dispatchEvent(new window.Event("input", { bubbles: true }));
+    checkBtn.click();
+    await wait(120);
+    check("a wrong typed answer is flagged", Boolean(view().querySelector(".typed-verdict.wrong")));
+    view().querySelector("[data-card-typed]").value = expected ? expected.back : "";
+    view().querySelector('[data-action="card-check-typed"]').click();
+    await wait(120);
+    check(
+      "the real answer is accepted",
+      Boolean(view().querySelector(".typed-verdict.correct")),
+      expected ? expected.back.slice(0, 40) : "",
+    );
+  }
+
   // ---------- printable sheets ----------
   window.location.hash = `#/kit/${kit.id}/flashcards`;
   await wait(150);
