@@ -3,13 +3,13 @@
     "npmloader.js"
   ],
   "js": [
-    "./src/store.js?v=2026-10-22y",
-    "./src/local.js?v=2026-10-22y",
-    "./src/markdown.js?v=2026-10-22y",
-    "./src/ocr.js?v=2026-10-22y",
-    "./src/ai.js?v=2026-10-22y",
-    "./src/jobs.js?v=2026-10-22y",
-    "./src/ui.js?v=2026-10-22y",
-    "./src/main.js?v=2026-10-22y"
+    "./src/store.js?v=2026-10-22z",
+    "./src/local.js?v=2026-10-22z",
+    "./src/markdown.js?v=2026-10-22z",
+    "./src/ocr.js?v=2026-10-22z",
+    "./src/ai.js?v=2026-10-22z",
+    "./src/jobs.js?v=2026-10-22z",
+    "./src/ui.js?v=2026-10-22z",
+    "./src/main.js?v=2026-10-22z"
   ]
 }

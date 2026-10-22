@@ -407,6 +407,39 @@ const modal = () => window.document.getElementById("modal-root");
     check("CSV quotes every field", rows[1].startsWith('"') && rows[1].includes('","'));
   }
 
+  // ---------- reverse the deck ----------
+  window.location.hash = `#/kit/${kit.id}/flashcards`;
+  await wait(160);
+  if (view().querySelector(".fc-typing")) {
+    view().querySelector('[data-action="toggle-typing"]').click();
+    await wait(150);
+  }
+  if (view().querySelector(".match-result")) {
+    view().querySelector('[data-action="stop-match"]').click();
+    await wait(150);
+  }
+  if (view().querySelector('[data-action="restart-cards"]')) {
+    view().querySelector('[data-action="restart-cards"]').click();
+    await wait(150);
+  }
+  const deckFrontText = () => (view().querySelector(".fc-front .fc-text") || {}).textContent || "";
+  const frontBeforeReverse = deckFrontText();
+  const reverseBtn = view().querySelector('[data-action="reverse-cards"]');
+  check("deck can be reversed", Boolean(reverseBtn));
+  if (reverseBtn) {
+    reverseBtn.click();
+    await wait(160);
+    check(
+      "reversing changes the prompt",
+      deckFrontText() !== frontBeforeReverse,
+      `${frontBeforeReverse.slice(0, 30)} → ${deckFrontText().slice(0, 30)}`,
+    );
+    check("the label says Definition", /Definition/.test((view().querySelector(".fc-front .fc-side") || {}).textContent || ""));
+    view().querySelector('[data-action="reverse-cards"]').click();
+    await wait(160);
+    check("reversing again restores the term", deckFrontText() === frontBeforeReverse);
+  }
+
   // ---------- match game ----------
   window.location.hash = `#/kit/${kit.id}/flashcards`;
   await wait(160);

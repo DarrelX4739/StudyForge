@@ -93,6 +93,7 @@
     typedVerdict: null,
     finished: false,
     unseenMode: false,
+    reversed: false,
     lastScheduled: null,
   };
   // Which classes / kits are open in the sidebar tree.
@@ -221,6 +222,7 @@
       typedVerdict: null,
       finished: false,
       unseenMode: false,
+      reversed: false,
       lastScheduled: null,
     };
   }
@@ -2535,8 +2537,12 @@ Active transport is the movement of substances against a concentration gradient,
     if (!card) return "";
 
     const vocab = kit.flashcards.style !== "question";
-    const frontLabel = vocab ? "Term" : "Question";
-    const backLabel = vocab ? "Definition" : "Answer";
+    // Reverse mode asks for the term instead of the meaning.
+    const reversed = Boolean(flashState.reversed);
+    const prompt = reversed ? card.back : card.front;
+    const answer = reversed ? card.front : card.back;
+    const frontLabel = reversed ? vocab ? "Definition" : "Answer" : vocab ? "Term" : "Question";
+    const backLabel = reversed ? vocab ? "Term" : "Question" : vocab ? "Definition" : "Answer";
     const progress = deckProgress(kit);
     const schedule = store.deckSchedule(kit.id);
     const knownCount = progress.known;
@@ -2573,19 +2579,19 @@ Active transport is the movement of substances against a concentration gradient,
 
         ${
           flashState.typing
-            ? typingStage(card, frontLabel, backLabel)
+            ? typingStage({ ...card, front: prompt, back: answer }, frontLabel, backLabel)
             : `<div class="fc-stage">
           <button class="flashcard ${flashState.flipped ? "is-flipped" : ""}" data-action="flip-card"
             aria-label="Flashcard — click to flip" aria-pressed="${flashState.flipped}">
             <span class="fc-inner">
               <span class="fc-face fc-front">
                 <span class="fc-side">${frontLabel}</span>
-                <span class="fc-text">${esc(card.front)}</span>
+                <span class="fc-text">${esc(prompt)}</span>
                 <span class="fc-hint">Click or press Space to flip</span>
               </span>
               <span class="fc-face fc-back">
                 <span class="fc-side">${backLabel}</span>
-                <span class="fc-text">${esc(card.back)}</span>
+                <span class="fc-text">${esc(answer)}</span>
                 <span class="fc-hint">Click or press Space to flip back</span>
               </span>
             </span>
@@ -2644,6 +2650,9 @@ Active transport is the movement of substances against a concentration gradient,
           }
           <button class="btn small ghost" data-action="toggle-typing">${
             flashState.typing ? "Flip mode" : "Type answers"
+          }</button>
+          <button class="btn small ghost" data-action="reverse-cards" aria-pressed="${flashState.reversed}">${
+            flashState.reversed ? "Term first" : "Meaning first"
           }</button>
           ${
             items.length >= 3
@@ -5398,10 +5407,19 @@ Active transport is the movement of substances against a concentration gradient,
         const card = kit.flashcards.items[order[flashState.index]];
         if (!card) break;
         flashState.typed = field.value;
-        flashState.typedVerdict = compareTyped(card.back, field.value);
+        flashState.typedVerdict = compareTyped(flashState.reversed ? card.front : card.back, field.value);
         render();
         const next = els.view.querySelector("[data-card-typed]");
         if (next) next.focus();
+        break;
+      }
+      case "reverse-cards": {
+        flashState.reversed = !flashState.reversed;
+        flashState.flipped = false;
+        flashState.typed = "";
+        flashState.typedVerdict = null;
+        render();
+        toast(flashState.reversed ? "Now showing the meaning first." : "Back to the term first.");
         break;
       }
       case "start-match": {

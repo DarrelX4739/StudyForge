@@ -225,6 +225,7 @@ merged, de-duplicated by prompt and interleaved so the deck is not grouped by re
 
 - Each card is one fact: a **front** you are cued with and a **back** you try to recall.
 - Choose 10, 20, 30 or 40 cards.
+- **Meaning first**: flip the deck so the definition is the prompt and the term is the answer.
 - **Match game**: pair six terms with their meanings against a clock — a quick warm-up before the real
   deck, and it counts towards your streak.
 - **Deck summary** when you reach the end: what you know, what is still slipping, and one tap back
@@ -444,7 +445,7 @@ npm test
 | `local-engine` | The on-device generator on its own (plain node): guide sections, card quality, four-option questions, seeds and refusals. |
 | `insights` | Progress analytics across attempts, trouble spots, per-question pace, hardest cards, card editing, the review schedule and exam resume. |
 
-All eight suites pass — 279 checks, zero console errors.
+All eight suites pass — 283 checks, zero console errors.
 
 ## Limitations
 
