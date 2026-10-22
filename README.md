@@ -235,6 +235,7 @@ merged, de-duplicated by prompt and interleaved so the deck is not grouped by re
   `=`, or ` - ` works too).
 - **Notes autosave** as you type, and a gentle backup nudge after two weeks — everything lives in
   this browser, so the library can be saved to a JSON file in one click.
+- **Offline chip** in the top bar: StudyForge keeps working with no connection, and the header says so.
 - **Undo** on every delete — the toast puts the kit, class or attempt straight back.
 - **Question palette** in a running practice test: one tap jumps to any question and shows what is
   already answered.

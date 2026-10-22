@@ -748,6 +748,9 @@
   }
   .engine-chip:hover{border-color:var(--accent-dim);color:var(--text)}
   .engine-dot{width:7px;height:7px;border-radius:99px;background:var(--muted-2);flex:0 0 auto}
+  .engine-chip.is-offline{background:color-mix(in srgb,var(--warn,#d97706) 16%,transparent);color:var(--text)}
+  .engine-chip.is-offline .engine-dot{background:var(--warn,#d97706)}
+  .engine-chip.is-offline .engine-dot{background:var(--warn,#d97706)}
   .engine-chip.local .engine-dot{background:var(--accent)}
   .engine-chip.ai .engine-dot{background:var(--good);box-shadow:0 0 0 3px var(--good-soft)}
   .engine-chip.offline .engine-dot{background:var(--warn)}
@@ -1298,14 +1301,14 @@
       done = true;
       console.warn("[StudyForge] " + reason + "; loading the project files directly.");
       [
-        "./src/store.js?v=2026-10-22s",
-        "./src/local.js?v=2026-10-22s",
-        "./src/markdown.js?v=2026-10-22s",
-        "./src/ocr.js?v=2026-10-22s",
-        "./src/ai.js?v=2026-10-22s",
-        "./src/jobs.js?v=2026-10-22s",
-        "./src/ui.js?v=2026-10-22s",
-        "./src/main.js?v=2026-10-22s",
+        "./src/store.js?v=2026-10-22t",
+        "./src/local.js?v=2026-10-22t",
+        "./src/markdown.js?v=2026-10-22t",
+        "./src/ocr.js?v=2026-10-22t",
+        "./src/ai.js?v=2026-10-22t",
+        "./src/jobs.js?v=2026-10-22t",
+        "./src/ui.js?v=2026-10-22t",
+        "./src/main.js?v=2026-10-22t",
       ].forEach(function (src) {
         var script = document.createElement("script");
         script.src = src;

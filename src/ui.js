@@ -672,10 +672,23 @@
     const info = StudyForge.ai.providerInfo();
     const enabled = StudyForge.ai.isAiEnabled();
     const local = info.kind === "local";
-    const label = local ? "On-device engine" : enabled ? info.label : `${info.label} — key needed`;
+    const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+    const label = offline
+      ? "Offline — still works"
+      : local
+        ? "On-device engine"
+        : enabled
+          ? info.label
+          : `${info.label} — key needed`;
     slot.innerHTML = `
-      <button class="engine-chip ${local ? "local" : enabled ? "ai" : "offline"}" data-action="open-settings"
-        title="${esc(local ? "Generation runs in this browser — no key needed" : `${esc(info.label)} is connected`)}">
+      <button class="engine-chip ${offline ? "offline" : local ? "local" : enabled ? "ai" : "offline"} ${offline ? "is-offline" : ""}" data-action="open-settings"
+        title="${esc(
+          offline
+            ? "No connection: guides, cards, quizzes and marking all run in this browser"
+            : local
+              ? "Generation runs in this browser — no key needed"
+              : `${info.label} is connected`,
+        )}">
         <span class="engine-dot"></span>
         <span class="engine-label">${esc(label)}</span>
       </button>`;
@@ -1889,7 +1902,9 @@ Active transport is the movement of substances against a concentration gradient,
           <span class="muted tiny">${
             marked
               ? "Locked in — answers cannot be changed."
-              : `${markedCount} of ${items.length} marked · press 1–4 to choose, Enter to continue`
+              : `${markedCount} of ${items.length} marked · 1–4 to choose, Enter to continue${
+                  item.type === "short" ? " (⌘/Ctrl-Enter to mark)" : ""
+                }`
           }</span>
           <button class="btn primary" data-action="quiz-next" ${marking || (!marked && !hasAnswer) ? "disabled" : ""}>
             ${marking ? '<span class="spinner"></span>' : ""}${label}
@@ -3291,6 +3306,7 @@ Active transport is the movement of substances against a concentration gradient,
             ["⌘K / Ctrl-K", "Search kits, resources and guide text"],
             ["1 – 4", "Pick a quiz option"],
             ["Enter", "Mark & next, or flip a card"],
+            ["⌘/Ctrl-Enter", "Mark a typed short answer"],
             ["Space", "Flip a flashcard"],
             ["← / →", "Previous / next card"],
             ["1 / K · 2 / A", "Got it · show again"],
@@ -5439,6 +5455,15 @@ Active transport is the movement of substances against a concentration gradient,
       { passive: true },
     );
 
+    window.addEventListener("offline", () => {
+      renderProviderBadge();
+      toast("You are offline — everything still works in this browser.", "info");
+    });
+    window.addEventListener("online", () => {
+      renderProviderBadge();
+      toast("Back online.", "success");
+    });
+
     document.addEventListener("click", (event) => {
       if (!event.target.closest || !event.target.closest("[data-skip-link]")) return;
       event.preventDefault();
@@ -5527,6 +5552,19 @@ Active transport is the movement of substances against a concentration gradient,
           }
           return;
         }
+      }
+      if (
+        event.target.matches &&
+        event.target.matches("[data-quiz-input]") &&
+        event.key === "Enter" &&
+        (event.metaKey || event.ctrlKey)
+      ) {
+        const next = els.view.querySelector('[data-action="quiz-next"]');
+        if (next && !next.disabled) {
+          event.preventDefault();
+          next.click();
+        }
+        return;
       }
       if (event.target && event.target.matches && event.target.matches("[data-doc-find]")) {
         if (event.key === "Enter") {
