@@ -39,6 +39,9 @@
   // Set by the browser when the app is installable; consumed by Settings.
   let installPrompt = null;
 
+  // Set when the dashboard asks to jump into a due-card review.
+  let pendingDueReview = null;
+
   // Quiz run. One question at a time: the answer is locked and marked the
   // moment "Next" is pressed, and everything is saved when the quiz is
   // submitted at the end.
@@ -286,6 +289,13 @@
         docViewId = null;
         resetDeck(route.id);
         if (examState.kitId !== route.id) resetExam(route.id);
+      }
+      if (kit && pendingDueReview === kit.id && route.tab === "flashcards") {
+        pendingDueReview = null;
+        flashState.reviewMode = true;
+        flashState.dueOnly = true;
+        flashState.index = 0;
+        flashState.flipped = false;
       }
       els.view.appendChild(
         kit ? renderKit(kit, route.tab) : renderMissing("That study kit no longer exists."),
@@ -629,6 +639,7 @@ Active transport is the movement of substances against a concentration gradient,
       <p class="page-sub">Turn your PDFs and notes into study guides, flashcards, quizzes and practice tests — every attempt is saved so you can watch yourself improve.</p>
       ${state.kits.length === 0 ? renderEmptyDashboard() : ""}
       ${renderStreakStrip(state)}
+      ${renderDuePanel(state)}
       ${renderContinueCard(state)}
       ${
         state.kits.length
@@ -680,6 +691,45 @@ Active transport is the movement of substances against a concentration gradient,
         }
       </div>`;
     return page;
+  }
+
+  /** Total cards waiting for review across the library, with a one-click start. */
+  function dueAcrossKits(state) {
+    const now = Date.now();
+    let total = 0;
+    let best = null;
+    for (const kit of state.kits) {
+      const deck = kit.flashcards;
+      if (!deck || !deck.items.length) continue;
+      const ratings = deck.ratings || {};
+      let due = 0;
+      for (const card of deck.items) {
+        const rating = ratings[cardKey(card)];
+        if (!rating || new Date(rating.dueAt).getTime() <= now) due += 1;
+      }
+      if (due > 0) {
+        total += due;
+        if (!best || due > best.due) best = { kit, due };
+      }
+    }
+    return { total, best };
+  }
+
+  function renderDuePanel(state) {
+    if (!state.kits.length || query || filterClassId) return "";
+    const { total, best } = dueAcrossKits(state);
+    if (!total || !best) return "";
+    return `
+      <section class="due-panel">
+        <div class="due-copy">
+          <span class="due-figure">${total}</span>
+          <div>
+            <strong>${total === 1 ? "card is" : "cards are"} due for review</strong>
+            <p class="muted tiny">Most come from ${esc(best.kit.name)}. A few minutes now keeps everything fresh.</p>
+          </div>
+        </div>
+        <button class="btn primary small" data-action="review-all-due" data-id="${esc(best.kit.id)}">Review now</button>
+      </section>`;
   }
 
   /** Streak + a two-week heat strip, so momentum is visible at a glance. */
@@ -3327,6 +3377,22 @@ Active transport is the movement of substances against a concentration gradient,
             toast("Card progress reset.", "success");
           },
         });
+        break;
+      }
+      case "review-all-due": {
+        const kitId = id;
+        if (!kitId) break;
+        pendingDueReview = kitId;
+        window.location.hash = `#/kit/${kitId}/flashcards`;
+        if (route.name === "kit" && route.id === kitId && route.tab === "flashcards") {
+          // Same hash: the listener will not fire, so render directly.
+          pendingDueReview = null;
+          flashState.reviewMode = true;
+          flashState.dueOnly = true;
+          flashState.index = 0;
+          flashState.flipped = false;
+          render();
+        }
         break;
       }
       case "review-due": {

@@ -806,6 +806,20 @@
     .review-line{flex-direction:column;gap:2px;margin-left:32px}
   }
 
+  /* Cards due today */
+  .due-panel{
+    display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between;
+    padding:14px 18px;border-radius:14px;margin-bottom:16px;
+    background:linear-gradient(120deg,var(--accent-soft),transparent 70%),var(--panel);
+    border:1px solid var(--accent-dim);
+  }
+  .due-copy{display:flex;gap:14px;align-items:center;min-width:0}
+  .due-copy p{margin:2px 0 0}
+  .due-figure{
+    font-size:1.6rem;font-weight:750;line-height:1;color:var(--accent);
+    font-variant-numeric:tabular-nums;
+  }
+
   /* Streak + heat strip */
   .streak-strip{
     display:flex;flex-wrap:wrap;gap:14px;align-items:center;
