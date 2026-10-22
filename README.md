@@ -453,9 +453,8 @@ All seven suites pass — 240 checks, zero console errors.
   ideas. Add an AI key for richer material and fuller marking.
 - Kits with many resources mean one model request per resource, so generating a large set takes
   proportionally longer — a 40-card deck or a 30-question exam across five resources is ten requests.
-- An exam run lives in memory: reloading the page or closing the tab abandons it (the saved paper and
-  last score survive). A quiz run is the same — reloading mid-quiz loses that run, but every submitted
-  attempt is saved.
+- An unfinished quiz or exam is kept on this device and offered back as Resume, but only one run per
+  kit is remembered — starting a fresh run replaces the saved one. Submitted attempts are always kept.
 - AI marking of short answers is a judgement call: it accepts different wordings, but can occasionally
   be generous or strict. The model answer is always shown for you to check.
 - Available models depend on your provider account (and, for NVIDIA, the Worker's family filter). If

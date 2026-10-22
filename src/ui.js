@@ -1982,7 +1982,7 @@ Active transport is the movement of substances against a concentration gradient,
                 <div class="review-item-head">
                   <span class="q-number">${index + 1}</span>
                   <span class="badge ${entry.correct ? "ready" : "error"}">${entry.correct ? "Correct" : "Incorrect"}</span>
-                  ${entry.type === "short" ? `<span class="pill tiny-pill">${Math.round(entry.score * 100)}% · ${esc(entry.markedBy === "ai" ? "AI marked" : "offline marked")}</span>` : ""}
+                  ${entry.type === "short" ? `<span class="pill tiny-pill">${Math.round(entry.score * 100)}% · ${esc(entry.markedBy === "ai" ? "AI marked" : "on-device marked")}</span>` : ""}
                 </div>
                 <p class="q-text">${esc(entry.question || item.question || "")}</p>
                 <p class="answer-line"><span class="muted">Your answer:</span> ${esc(entry.given || "—")}</p>
