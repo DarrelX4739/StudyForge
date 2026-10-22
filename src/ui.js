@@ -3998,6 +3998,8 @@ Active transport is the movement of substances against a concentration gradient,
             ["1 / K · 2 / A", "Got it · show again"],
             ["Enter", "Jump to the next find match in a guide"],
             ["?", "This list"],
+            ["Esc", "Leave a guide find box or focus mode"],
+            ["⌘/Ctrl-Shift-X", "Leave a quiz run (progress is kept)"],
             ["Esc", "Close a dialog"],
           ]
             .map(
@@ -6442,6 +6444,22 @@ Active transport is the movement of substances against a concentration gradient,
       if (event.key === "?" && !typing && els.modalRoot.hidden) {
         event.preventDefault();
         openShortcuts();
+        return;
+      }
+      // Cmd/Ctrl-Shift-X leaves a quiz run without a dialog (progress is saved).
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.shiftKey &&
+        event.key.toLowerCase() === "x" &&
+        route.name === "kit" &&
+        route.tab === "questions" &&
+        quizState.status === "running"
+      ) {
+        event.preventDefault();
+        saveQuizDraft();
+        resetQuiz(quizState.kitId);
+        render();
+        toast("Quiz left — you can resume it from the quiz page.");
         return;
       }
       if (event.key === "Escape") {
