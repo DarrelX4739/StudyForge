@@ -729,6 +729,52 @@
     background:var(--panel-2);border-radius:0 0 18px 18px;position:sticky;bottom:0;
   }
 
+  /* engine chip ----------------------------------------------------- */
+  .provider-slot{display:flex;align-items:center}
+  .engine-chip{
+    display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:99px;
+    border:1px solid var(--line);background:var(--panel);color:var(--muted);
+    font:inherit;font-size:.78rem;font-weight:560;cursor:pointer;white-space:nowrap;
+    transition:border-color .15s,color .15s,background .15s;
+  }
+  .engine-chip:hover{border-color:var(--accent-dim);color:var(--text)}
+  .engine-dot{width:7px;height:7px;border-radius:99px;background:var(--muted-2);flex:0 0 auto}
+  .engine-chip.local .engine-dot{background:var(--accent)}
+  .engine-chip.ai .engine-dot{background:var(--good);box-shadow:0 0 0 3px var(--good-soft)}
+  .engine-chip.offline .engine-dot{background:var(--warn)}
+  .engine-chip.ai{color:var(--text);border-color:var(--good-line);background:var(--good-soft)}
+  @media (max-width:720px){ .engine-label{display:none} .engine-chip{padding:7px} }
+
+  /* provider picker ------------------------------------------------- */
+  .provider-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:14px}
+  .provider-card{
+    display:grid;gap:4px;text-align:left;padding:11px 12px;border-radius:12px;
+    border:1px solid var(--line);background:var(--panel-2);color:var(--text);
+    font:inherit;cursor:pointer;transition:border-color .15s,background .15s,transform .12s;
+  }
+  .provider-card:hover{border-color:var(--accent-dim);transform:translateY(-1px)}
+  .provider-card.active{border-color:var(--accent);background:var(--accent-soft);box-shadow:var(--ring)}
+  .provider-top{display:flex;align-items:center;justify-content:space-between;gap:6px}
+  .provider-top strong{font-size:.84rem;font-weight:640}
+  .provider-badge{font-size:.65rem;font-weight:700;padding:1px 7px;border-radius:99px;text-transform:uppercase;letter-spacing:.04em}
+  .provider-badge.ok{background:var(--good-soft);color:var(--good)}
+  .provider-badge.warn{background:var(--warn-soft);color:var(--warn)}
+  .provider-blurb{font-size:.73rem;line-height:1.45;color:var(--muted)}
+  .settings-more{margin-top:18px;border-top:1px solid var(--line);padding-top:14px}
+  .settings-more summary{cursor:pointer;font-weight:600;font-size:.86rem;color:var(--text);margin-bottom:8px}
+  .modal-wide{width:min(680px,calc(100vw - 32px))}
+
+  /* study guide table of contents ----------------------------------- */
+  .doc-toc{
+    display:grid;gap:3px;margin:0 0 18px;padding:12px 14px;border-radius:12px;
+    background:var(--panel-2);border:1px solid var(--line);
+  }
+  .doc-toc-label{font-size:.7rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted-2);margin-bottom:2px}
+  .doc-toc a{
+    font-size:.82rem;color:var(--muted);padding:2px 0;border-left:2px solid transparent;padding-left:8px;
+  }
+  .doc-toc a:hover{color:var(--accent);border-left-color:var(--accent)}
+
   /* collapsed sidebar ---------------------------------------------- */
   body.nav-collapsed{--sidebar-w:78px}
   body.nav-collapsed .brand-text,
@@ -828,6 +874,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
       </button>
       <div class="search"><input id="search" type="search" placeholder="Search study kits and resources…  (⌘K)" aria-label="Search study kits and resources"></div>
+      <div class="provider-slot" id="provider-slot"></div>
       <div class="top-actions">
         <button class="icon-btn" id="btn-export" title="Export a JSON backup" aria-label="Export a backup">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 19h14"/></svg>
@@ -877,6 +924,7 @@
       console.warn("[StudyForge] " + reason + "; loading the project files directly.");
       [
         "./src/store.js?v=2026-10-21a",
+        "./src/local.js?v=2026-10-21a",
         "./src/markdown.js?v=2026-10-21a",
         "./src/ocr.js?v=2026-10-21a",
         "./src/ai.js?v=2026-10-21a",

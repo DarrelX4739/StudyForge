@@ -4,6 +4,7 @@
   ],
   "js": [
     "./src/store.js?v=2026-10-21a",
+    "./src/local.js?v=2026-10-21a",
     "./src/markdown.js?v=2026-10-21a",
     "./src/ocr.js?v=2026-10-21a",
     "./src/ai.js?v=2026-10-21a",

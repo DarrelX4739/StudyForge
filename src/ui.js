@@ -162,6 +162,7 @@
       again: {},
       shuffled: false,
       showList: false,
+      reviewMode: false,
     };
   }
 
@@ -186,6 +187,14 @@
   function deckOrder(kit) {
     const total = kit.flashcards ? kit.flashcards.items.length : 0;
     if (!total) return [];
+    if (flashState.reviewMode) {
+      const again = Object.keys(flashState.again)
+        .map(Number)
+        .filter((index) => index >= 0 && index < total)
+        .sort((a, b) => a - b);
+      if (again.length) return again;
+      flashState.reviewMode = false;
+    }
     if (!flashState.order || flashState.order.length !== total) {
       flashState.order = Array.from({ length: total }, (_, index) => index);
     }
@@ -204,10 +213,12 @@
     return Math.max(0, Math.ceil((examState.endsAt - Date.now()) / 1000));
   }
 
+  /**
+   * StudyForge always has a working engine: the on-device one. This used to
+   * demand an API key; now it only exists so call sites stay readable.
+   */
   function requireKey() {
-    if (store.getApiKey()) return true;
-    openSettings("Add your NVIDIA NIM API key first — it is used for every AI step.");
-    return false;
+    return true;
   }
 
   /* ------------------------------------------------------------------ *
@@ -277,6 +288,7 @@
     restoreDrafts(snapshot);
     renderSidebar();
     renderStorage();
+    renderProviderBadge();
   }
 
   function renderMissing(message) {
@@ -449,6 +461,25 @@
     }
   }
 
+  /**
+   * Topbar chip: which engine will write the next study guide.
+   * Local is a first-class state here, not an error.
+   */
+  function renderProviderBadge() {
+    const slot = $("provider-slot");
+    if (!slot) return;
+    const info = StudyForge.ai.providerInfo();
+    const enabled = StudyForge.ai.isAiEnabled();
+    const local = info.kind === "local";
+    const label = local ? "On-device engine" : enabled ? info.label : `${info.label} — key needed`;
+    slot.innerHTML = `
+      <button class="engine-chip ${local ? "local" : enabled ? "ai" : "offline"}" data-action="open-settings"
+        title="${esc(local ? "Generation runs in this browser — no key needed" : `${esc(info.label)} is connected`)}">
+        <span class="engine-dot"></span>
+        <span class="engine-label">${esc(label)}</span>
+      </button>`;
+  }
+
   function renderStorage() {
     const bytes = store.storageBytes();
     const limit = 5 * 1024 * 1024;
@@ -458,6 +489,72 @@
       <div class="storage-row"><span>Local storage</span><strong>${(bytes / 1024).toFixed(0)} KB</strong></div>
       <div class="meter"><span style="width:${percent}%"></span></div>
       ${error ? '<p class="tiny danger">Storage is full — export a backup and delete old resources.</p>' : ""}`;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Sample kit
+   * ------------------------------------------------------------------ */
+
+  const DEMO_TEXT = `Photosynthesis is the process by which green plants convert light energy into chemical energy stored in glucose.
+
+Chlorophyll: the green pigment inside chloroplasts that absorbs light energy.
+
+- Mitochondria — the organelles where aerobic respiration releases energy from glucose.
+- Osmosis — the movement of water across a semi-permeable membrane from a low solute concentration to a high one.
+
+Carbon dioxide and water are the raw materials of photosynthesis, and oxygen is released as a by-product. The light-dependent reactions happen in the thylakoid membranes, while the Calvin cycle fixes carbon in the stroma.
+
+Cellular respiration is the process that releases energy from glucose in the mitochondria. Respiration produces ATP, which powers most cellular work, and it happens in three stages: glycolysis, the Krebs cycle and the electron transport chain.
+
+Enzymes are proteins that speed up chemical reactions by lowering activation energy. Enzyme activity is affected by temperature and pH, and each enzyme has an optimum where its rate is highest.
+
+Diffusion is the net movement of particles from a region of high concentration to a region of low concentration. Osmosis is a special case of diffusion that only involves water.
+
+Active transport is the movement of substances against a concentration gradient, and it requires energy in the form of ATP.`;
+
+  /** One-click starter kit so the first run is never an empty page. */
+  function createDemoKit() {
+    if (!StudyForge.local.hasUsableText(DEMO_TEXT)) return null;
+    let cls = store.get().classes.find((item) => item.name === "Biology");
+    if (!cls) cls = store.addClass("Biology");
+    const kit = store.addKit({ name: "Cells & Transport", classId: cls.id, subject: "Sample kit" });
+    const resource = store.addResource({ kitId: kit.id, name: "Sample notes", type: "text" });
+    store.setResourceDocument(resource.id, StudyForge.local.buildStudyDocument({
+      name: "Cells & Transport",
+      subject: "Sample kit",
+      text: DEMO_TEXT,
+    }));
+    store.updateResource(resource.id, { status: "ready", statusMessage: "Sample notes ready." });
+    // Build the set straight from the document — instant, no job queue noise.
+    try {
+      const questions = StudyForge.local.buildQuestions({ text: DEMO_TEXT, count: 8 });
+      store.setKitQuiz(kit.id, {
+        generatedAt: new Date().toISOString(),
+        items: questions,
+        sourceCount: 1,
+        sourceNames: ["Sample notes"],
+        coverage: [{ id: resource.id, name: "Sample notes", requested: 8, produced: questions.length }],
+        failures: [],
+        engine: "local",
+      });
+      const cards = StudyForge.local.buildFlashcards({ text: DEMO_TEXT, count: 12, style: "vocab" }).map((card) => ({
+        ...card,
+        source: "Sample notes",
+      }));
+      store.setKitFlashcards(kit.id, {
+        generatedAt: new Date().toISOString(),
+        items: cards,
+        style: "vocab",
+        engine: "local",
+        sourceCount: 1,
+        sourceNames: ["Sample notes"],
+        coverage: [{ id: resource.id, name: "Sample notes", requested: 12, produced: cards.length }],
+        failures: [],
+      });
+    } catch (error) {
+      console.warn("[StudyForge] Sample kit partially built:", error);
+    }
+    return { kit, cls };
   }
 
   /* ------------------------------ dashboard ------------------------ */
@@ -571,7 +668,9 @@
         <div class="row center">
           <button class="btn primary" data-action="new-kit">New study kit</button>
           <button class="btn" data-action="new-class">New class</button>
+          <button class="btn" data-action="load-demo">Try a sample kit</button>
         </div>
+        <p class="tiny muted">The sample kit builds a guide, 12 flashcards and an 8-question quiz on the spot — no key, no setup.</p>
       </div>`;
   }
 
@@ -738,6 +837,10 @@
     }
 
     const selected = withDocs.find((resource) => resource.id === docViewId) || withDocs[0];
+    const headings = (selected.document.match(/^#{1,3}\s+(.+)$/gm) || [])
+      .map((line) => line.replace(/^#+\s+/, "").trim())
+      .filter(Boolean)
+      .slice(0, 14);
     return `
       <div class="doc-layout">
         <section class="panel doc-side">
@@ -766,7 +869,20 @@
               <button class="btn small" data-action="download-doc" data-id="${esc(selected.id)}">Download .md</button>
             </div>
           </div>
-          <article class="md">${md.render(selected.document)}</article>
+          ${
+            headings.length > 1
+              ? `<nav class="doc-toc" aria-label="On this page">
+                  <span class="doc-toc-label">On this page</span>
+                  ${headings
+                    .map(
+                      (heading, index) =>
+                        `<a href="#doc-${index}" data-action="toc-jump" data-index="${index}">${esc(heading)}</a>`,
+                    )
+                    .join("")}
+                </nav>`
+              : ""
+          }
+          <article class="md" data-doc-body>${md.render(selected.document)}</article>
         </section>
       </div>`;
   }
@@ -936,6 +1052,12 @@
       ${renderAttempts(kit)}`;
   }
 
+  /** The questions in play: a full set, or the missed-only retry subset. */
+  function activeQuizItems(kit) {
+    if (quizState.items && quizState.items.length) return quizState.items;
+    return (kit.quiz && kit.quiz.items) || [];
+  }
+
   function renderQuizDots(items) {
     return `<div class="quiz-dots" aria-hidden="true">${items
       .map((_, index) => {
@@ -1006,8 +1128,7 @@
   }
 
   function renderQuizRunner(kit) {
-    const quiz = kit.quiz;
-    const items = quiz.items;
+    const items = activeQuizItems(kit);
     const index = Math.min(quizState.index, items.length - 1);
     const item = items[index];
     const answer = quizState.answers[index];
@@ -1057,7 +1178,9 @@
 
         <footer class="quiz-foot">
           <span class="muted tiny">${
-            marked ? "Locked in — answers cannot be changed." : `${markedCount} of ${items.length} marked · answers lock when marked`
+            marked
+              ? "Locked in — answers cannot be changed."
+              : `${markedCount} of ${items.length} marked · press 1–4 to choose, Enter to continue`
           }</span>
           <button class="btn primary" data-action="quiz-next" ${marking || (!marked && !hasAnswer) ? "disabled" : ""}>
             ${marking ? '<span class="spinner"></span>' : ""}${label}
@@ -1094,8 +1217,8 @@
             }${shortCount ? ` · ${plural(shortCount, "AI-marked short answer")}` : ""}
           </p>
           <div class="row tight">
-            <button class="btn primary" data-action="retry-quiz">Try again</button>
-            <button class="btn" data-action="make-quiz" data-id="${esc(kit.id)}">New questions</button>
+            <button class="btn primary" data-action="practise-missed" ${attempt.correct === attempt.total ? "disabled" : ""}>Practise missed</button>
+            <button class="btn" data-action="retry-quiz">Try again</button>
             <button class="btn ghost" data-action="quiz-back">Back to overview</button>
           </div>
         </div>
@@ -1105,7 +1228,7 @@
       <ol class="quiz review-list">
         ${attempt.answers
           .map((entry, index) => {
-            const item = quiz.items[index] || {};
+            const item = (quizState.attemptItems || quiz.items)[index] || {};
             return `
               <li class="review-item ${entry.correct ? "q-correct" : "q-wrong"}">
                 <div class="review-item-head">
@@ -1206,7 +1329,7 @@
       <div class="deck">
         <div class="deck-bar">
           <span class="muted tiny">Card ${position + 1} of ${order.length}${
-            flashState.shuffled ? " · shuffled" : ""
+            flashState.reviewMode ? " · review" : flashState.shuffled ? " · shuffled" : ""
           }</span>
           <span class="muted tiny">${knownCount} known${againCount ? ` · ${againCount} to review` : ""}</span>
         </div>
@@ -1248,6 +1371,11 @@
         </div>
 
         <div class="row center tight deck-tools">
+          ${
+            againCount
+              ? `<button class="btn small" data-action="review-again">Review ${againCount} to learn</button>`
+              : ""
+          }
           <button class="btn small ghost" data-action="shuffle-cards">Shuffle</button>
           <button class="btn small ghost" data-action="restart-cards">Restart</button>
           <button class="btn small ghost" data-action="deck-list">${
@@ -1568,13 +1696,14 @@
   }
 
   /**
-   * @param {{title:string, body:string, confirmLabel?:string, danger?:boolean, onConfirm?:Function, onMount?:Function}} options
+   * @param {{title:string, body:string, confirmLabel?:string, danger?:boolean, wide?:boolean,
+   *          onConfirm?:Function, onMount?:Function}} options
    */
   function openModal(options) {
     els.modalRoot.hidden = false;
     els.modalRoot.innerHTML = `
       <div class="modal-backdrop" data-close></div>
-      <div class="modal" role="dialog" aria-modal="true" aria-label="${esc(options.title)}">
+      <div class="modal ${options.wide ? "modal-wide" : ""}" role="dialog" aria-modal="true" aria-label="${esc(options.title)}">
         <header class="modal-head">
           <h2>${esc(options.title)}</h2>
           <button class="icon-btn" data-close title="Close">×</button>
@@ -1737,200 +1866,269 @@
     });
   }
 
+  /* ------------------------------------------------------------------ *
+   * Settings
+   * ------------------------------------------------------------------ */
+
   const CUSTOM_MODEL = "__custom__";
 
-  function modelFilterLabel() {
-    return StudyForge.ai.MODEL_FILTER.join(", ");
+  const PROVIDER_ORDER = ["local", "gemini", "openrouter", "nvidia", "custom"];
+
+  function providerCard(id, draft) {
+    const info = StudyForge.ai.providers()[id];
+    const active = draft.provider === id;
+    const badge = id === "local" ? "No key" : info.needsKey && !draft.keys[id] ? "Key needed" : "Ready";
+    const ready = id === "local" || (info.needsKey ? Boolean(draft.keys[id]) : Boolean(draft.baseUrl));
+    return `
+      <button type="button" class="provider-card ${active ? "active" : ""}" data-provider="${id}">
+        <span class="provider-top">
+          <strong>${esc(info.label)}</strong>
+          <span class="provider-badge ${ready ? "ok" : "warn"}">${esc(badge)}</span>
+        </span>
+        <span class="provider-blurb">${esc(info.blurb)}</span>
+      </button>`;
   }
 
-  /** Options for the model select, always including the currently saved model. */
-  function modelOptionsHtml(currentModel) {
-    const cached = modelCache.models;
-    const ids = new Set([currentModel, StudyForge.ai.DEFAULT_MODEL, ...cached.map((model) => model.id)].filter(Boolean));
-    const options = [...ids]
-      .sort((a, b) => a.localeCompare(b))
-      .map(
-        (id) =>
-          `<option value="${esc(id)}" ${id === currentModel ? "selected" : ""}>${esc(id)}${
-            id === StudyForge.ai.DEFAULT_MODEL ? " (default)" : ""
-          }</option>`,
-      );
-    options.push(`<option value="${CUSTOM_MODEL}" ${ids.has(currentModel) ? "" : "selected"}>Custom model id…</option>`);
-    return options.join("");
+  function modelChoices(draft) {
+    const info = StudyForge.ai.providers()[draft.provider];
+    const saved = draft.models[draft.provider] || "";
+    const ids = new Set([info.model, saved, ...(draft.catalogue[draft.provider] || [])].filter(Boolean));
+    return [...ids];
   }
 
-  /** Populate the select in an open settings modal. */
-  function fillModelOptions(root, currentModel, { keepCustom = false } = {}) {
-    const select = root.querySelector("#set-model");
-    if (!select) return;
-    const previous = keepCustom ? select.value : currentModel;
-    select.innerHTML = modelOptionsHtml(currentModel);
-    if (previous && [...select.options].some((option) => option.value === previous)) select.value = previous;
-    syncCustomInput(root);
-  }
-
-  function syncCustomInput(root) {
-    const select = root.querySelector("#set-model");
-    const input = root.querySelector("#set-model-custom");
-    if (!select || !input) return;
-    const custom = select.value === CUSTOM_MODEL;
-    input.hidden = !custom;
-    if (custom && !input.value) input.value = "";
-  }
-
-  function readModelField(root) {
-    const select = root.querySelector("#set-model");
-    const input = root.querySelector("#set-model-custom");
-    if (select && select.value === CUSTOM_MODEL) {
-      const custom = input ? input.value.trim() : "";
-      return custom;
+  /** The provider-specific half of the settings form. */
+  function providerPanel(draft) {
+    const info = StudyForge.ai.providers()[draft.provider];
+    if (info.kind === "local") {
+      return `
+        <div class="notice subtle">
+          <strong>Nothing to set up.</strong> Study guides, flashcards, quizzes and practice tests are generated in
+          this tab from your notes. No key, no network, no cost. Connect an AI provider below for richer rewrites.
+        </div>`;
     }
-    return select ? select.value : "";
-  }
 
-  async function loadModelCatalogue(root, { key, statusEl, button }) {
-    const apiKey = (key || "").trim();
-    if (!apiKey) {
-      if (statusEl) statusEl.textContent = "Enter your NVIDIA API key first.";
-      return;
-    }
-    if (button) button.disabled = true;
-    if (statusEl) statusEl.textContent = "Loading models from NVIDIA…";
+    const key = draft.keys[draft.provider] || "";
+    const choices = modelChoices(draft);
+    const currentModel = draft.models[draft.provider] || info.model || "";
 
-    try {
-      const { models } = await StudyForge.ai.listModels({ apiKey });
-      modelCache.models = models;
-      modelCache.loadedAt = Date.now();
-      const saved = readModelField(root) || store.getSettings().model;
-      fillModelOptions(root, saved, { keepCustom: true });
-      if (statusEl) {
-        statusEl.textContent = models.length
-          ? `${models.length} model(s) available. Only ${modelFilterLabel()} models are listed.`
-          : `No models matched ${modelFilterLabel()}. Use a custom model id.`;
+    return `
+      ${
+        info.needsKey
+          ? `<div class="field">
+              <label for="set-key">${esc(info.keyLabel)}</label>
+              <input id="set-key" type="password" autocomplete="off" spellcheck="false"
+                value="${esc(key)}" placeholder="${esc(info.keyPlaceholder || "")}">
+              <span class="hint">
+                Stored in this browser only. ${
+                  info.keyUrl
+                    ? `<a href="${esc(info.keyUrl)}" target="_blank" rel="noopener">Get a key →</a>`
+                    : ""
+                }
+              </span>
+            </div>`
+          : ""
       }
-      if (!models.length) {
-        const select = root.querySelector("#set-model");
-        if (select) {
-          select.value = CUSTOM_MODEL;
-          syncCustomInput(root);
-        }
+      ${
+        draft.provider === "custom"
+          ? `<div class="field">
+              <label for="set-base">Endpoint base URL</label>
+              <input id="set-base" type="text" spellcheck="false" value="${esc(draft.baseUrl)}"
+                placeholder="https://my-relay.example.workers.dev/v1">
+              <span class="hint">Any OpenAI-compatible base URL. Requests go to <code>/chat/completions</code> and <code>/models</code>.</span>
+            </div>`
+          : ""
       }
-    } catch (error) {
-      if (statusEl) statusEl.textContent = "Could not load models: " + StudyForge.ai.describeError(error);
-    } finally {
-      if (button) button.disabled = false;
-    }
+      <div class="field">
+        <label for="set-model">Model</label>
+        <select id="set-model">
+          ${choices
+            .map(
+              (id) =>
+                `<option value="${esc(id)}" ${id === currentModel ? "selected" : ""}>${esc(id)}${
+                  id === info.model ? " (recommended)" : ""
+                }</option>`,
+            )
+            .join("")}
+          <option value="${CUSTOM_MODEL}" ${choices.includes(currentModel) ? "" : "selected"}>Custom model id…</option>
+        </select>
+        <input id="set-model-custom" type="text" placeholder="model-id" hidden value="${
+          choices.includes(currentModel) ? "" : esc(currentModel)
+        }">
+        <div class="row tight" style="margin-top:6px">
+          <button type="button" class="btn small" id="set-models-refresh">Load models</button>
+          <button type="button" class="btn small" id="set-test">Test connection</button>
+          <span class="hint" id="set-provider-status"></span>
+        </div>
+      </div>`;
+  }
+
+  function settingsDraftFromStore() {
+    const settings = store.getSettings();
+    return {
+      provider: settings.provider || "local",
+      keys: {
+        gemini: settings.providerKeys.gemini || "",
+        openrouter: settings.providerKeys.openrouter || "",
+        nvidia: settings.providerKeys.nvidia || "",
+        custom: settings.providerKeys.custom || "",
+      },
+      baseUrl: settings.baseUrl || "",
+      models: { ...(settings.modelByProvider || {}) },
+      catalogue: {},
+      ocrLanguage: settings.ocrLanguage,
+      ocrScale: settings.ocrScale,
+      flashcardStyle: settings.flashcardStyle,
+      savedModel: settings.model,
+    };
   }
 
   function openSettings(note) {
-    const settings = store.getSettings();
+    const draft = settingsDraftFromStore();
+    if (!draft.models[draft.provider] && draft.provider === "nvidia") draft.models.nvidia = draft.savedModel;
+
     openModal({
       title: "Settings",
       confirmLabel: "Save settings",
+      wide: true,
       body: `
         ${note ? `<div class="notice">${esc(note)}</div>` : ""}
-        <div class="field">
-          <label for="set-key">NVIDIA NIM API key</label>
-          <input id="set-key" type="password" autocomplete="off" spellcheck="false" value="${esc(settings.apiKey)}" placeholder="nvapi-…">
-          <span class="hint">Saved in this browser's localStorage and sent only to the StudyForge Worker → NVIDIA NIM.</span>
+        <p class="label" style="margin-bottom:8px">Where should StudyForge generate from?</p>
+        <div class="provider-grid" id="provider-grid">
+          ${PROVIDER_ORDER.map((id) => providerCard(id, draft)).join("")}
         </div>
-        <div class="field">
-          <label for="set-model">Model</label>
-          <select id="set-model">${modelOptionsHtml(settings.model)}</select>
-          <div class="row tight" style="margin-top:2px">
-            <button type="button" class="btn small" id="set-model-refresh">Load available models</button>
-            <span class="hint" id="set-model-status">Only ${esc(modelFilterLabel())} models are listed.</span>
+        <div id="provider-panel">${providerPanel(draft)}</div>
+
+        <details class="settings-more">
+          <summary>Documents, OCR and defaults</summary>
+          <div class="field-row">
+            <div class="field"><label for="set-lang">OCR language</label>
+              <select id="set-lang">
+                ${[
+                  ["eng", "English"],
+                  ["jpn", "Japanese"],
+                  ["eng+jpn", "English + Japanese"],
+                  ["chi_sim", "Chinese (Simplified)"],
+                  ["fra", "French"],
+                  ["deu", "German"],
+                  ["spa", "Spanish"],
+                ]
+                  .map(
+                    ([value, label]) =>
+                      `<option value="${value}" ${draft.ocrLanguage === value ? "selected" : ""}>${label}</option>`,
+                  )
+                  .join("")}
+              </select>
+            </div>
+            <div class="field"><label for="set-scale">OCR render quality</label>
+              <select id="set-scale">
+                ${[1, 1.5, 2, 2.5, 3]
+                  .map(
+                    (value) =>
+                      `<option value="${value}" ${Number(draft.ocrScale) === value ? "selected" : ""}>${value}×</option>`,
+                  )
+                  .join("")}
+              </select>
+            </div>
           </div>
-          <input id="set-model-custom" type="text" placeholder="vendor/model-id" hidden>
-          <span class="hint">The list comes from your NVIDIA account through the StudyForge Worker, filtered to the supported model families.</span>
-        </div>
-        <div class="field-row">
-          <div class="field"><label for="set-lang">OCR language</label>
-            <select id="set-lang">
-              ${[
-                ["eng", "English"],
-                ["jpn", "Japanese"],
-                ["eng+jpn", "English + Japanese"],
-                ["chi_sim", "Chinese (Simplified)"],
-                ["fra", "French"],
-                ["deu", "German"],
-                ["spa", "Spanish"],
-              ]
-                .map(
-                  ([value, label]) =>
-                    `<option value="${value}" ${settings.ocrLanguage === value ? "selected" : ""}>${label}</option>`,
-                )
-                .join("")}
+          <div class="field">
+            <label for="set-cards">Default flashcard style</label>
+            <select id="set-cards">
+              <option value="vocab" ${draft.flashcardStyle === "vocab" ? "selected" : ""}>Vocabulary &amp; concepts — term on the front</option>
+              <option value="question" ${draft.flashcardStyle === "question" ? "selected" : ""}>Exam-style questions — question on the front</option>
             </select>
           </div>
-          <div class="field"><label for="set-scale">OCR render quality</label>
-            <select id="set-scale">
-              ${[1, 1.5, 2, 2.5, 3]
-                .map(
-                  (value) =>
-                    `<option value="${value}" ${Number(settings.ocrScale) === value ? "selected" : ""}>${value}×</option>`,
-                )
-                .join("")}
-            </select>
+          <div class="notice subtle">
+            <strong>Build:</strong> ${esc((globalThis.STUDYFORGE_CONFIG || {}).version || "unknown")}<br>
+            <strong>Engine:</strong> ${esc(StudyForge.ai.providerLabel())}<br>
+            <strong>Storage:</strong> ${(store.storageBytes() / 1024).toFixed(0)} KB used in this browser.
+            Uploaded files and their raw text are never stored.
           </div>
-        </div>
-        <div class="field">
-          <label for="set-cards">Flashcards</label>
-          <select id="set-cards">
-            <option value="vocab" ${settings.flashcardStyle === "vocab" ? "selected" : ""}>Vocabulary &amp; concepts — term on the front, definition on the back</option>
-            <option value="question" ${settings.flashcardStyle === "question" ? "selected" : ""}>Exam-style questions — question on the front, answer on the back</option>
-          </select>
-          <span class="hint">The default for new decks. You can still pick the other style when generating one.</span>
-        </div>
-        <div class="notice subtle">
-          <strong>Build:</strong> ${esc((globalThis.STUDYFORGE_CONFIG || {}).version || "unknown")}
-          <span class="tiny">— if this is not the build you expect, hard-reload (Ctrl/Cmd-Shift-R).</span><br>
-          <strong>Model:</strong> ${esc(settings.model)}<br>
-          <strong>Storage:</strong> ${(store.storageBytes() / 1024).toFixed(0)} KB used in localStorage.
-          Study guides and quiz results are saved locally; uploaded files and their raw text are never stored.
-        </div>
-        <div class="notice error-soft">
-          <strong>Danger zone</strong>
-          <p class="tiny">Delete every class, study kit, resource, document and question from this browser.</p>
-          <button class="btn small danger-solid" data-clear-all>Delete all data</button>
-        </div>`,
+          <div class="notice error-soft">
+            <strong>Danger zone</strong>
+            <p class="tiny">Delete every class, study kit, resource, guide and attempt from this browser.</p>
+            <button class="btn small danger-solid" data-clear-all>Delete all data</button>
+          </div>
+        </details>`,
       onMount: (root) => {
-        const keyInput = root.querySelector("#set-key");
-        const toggle = document.createElement("button");
-        toggle.type = "button";
-        toggle.className = "btn small";
-        toggle.textContent = "Show";
-        toggle.style.marginTop = "6px";
-        toggle.addEventListener("click", () => {
-          const show = keyInput.type === "password";
-          keyInput.type = show ? "text" : "password";
-          toggle.textContent = show ? "Hide" : "Show";
-        });
-        keyInput.insertAdjacentElement("afterend", toggle);
+        const panel = root.querySelector("#provider-panel");
+        const grid = root.querySelector("#provider-grid");
+        const statusEl = () => root.querySelector("#set-provider-status");
 
-        const modelSelect = root.querySelector("#set-model");
-        const refresh = root.querySelector("#set-model-refresh");
-        const statusEl = root.querySelector("#set-model-status");
+        // Keep what has been typed when the panel is re-rendered.
+        const capture = () => {
+          const key = root.querySelector("#set-key");
+          if (key) draft.keys[draft.provider] = key.value.trim();
+          const base = root.querySelector("#set-base");
+          if (base) draft.baseUrl = base.value.trim();
+          const model = readModelField(root);
+          if (model) draft.models[draft.provider] = model;
+        };
 
-        modelSelect.addEventListener("change", () => {
+        const repaintPanel = () => {
+          panel.innerHTML = providerPanel(draft);
           syncCustomInput(root);
-          const input = root.querySelector("#set-model-custom");
-          if (input && modelSelect.value === CUSTOM_MODEL) input.focus();
-        });
-        syncCustomInput(root);
+          wirePanel();
+        };
 
-        refresh.addEventListener("click", () => loadModelCatalogue(root, { key: keyInput.value, statusEl, button: refresh }));
+        const wirePanel = () => {
+          const key = root.querySelector("#set-key");
+          if (key) {
+            const toggle = document.createElement("button");
+            toggle.type = "button";
+            toggle.className = "btn small";
+            toggle.textContent = "Show";
+            toggle.style.marginTop = "6px";
+            toggle.addEventListener("click", () => {
+              const show = key.type === "password";
+              key.type = show ? "text" : "password";
+              toggle.textContent = show ? "Hide" : "Show";
+            });
+            key.insertAdjacentElement("afterend", toggle);
+            key.addEventListener("input", () => {
+              draft.keys[draft.provider] = key.value.trim();
+            });
+          }
+          const base = root.querySelector("#set-base");
+          if (base) base.addEventListener("input", () => (draft.baseUrl = base.value.trim()));
 
-        // Load the catalogue straight away when a key is already available.
-        if (keyInput.value.trim()) {
-          loadModelCatalogue(root, { key: keyInput.value, statusEl, button: refresh });
-        }
+          const modelSelect = root.querySelector("#set-model");
+          if (modelSelect) {
+            modelSelect.addEventListener("change", () => {
+              syncCustomInput(root);
+              const input = root.querySelector("#set-model-custom");
+              if (input && modelSelect.value === CUSTOM_MODEL) input.focus();
+              else draft.models[draft.provider] = modelSelect.value;
+            });
+            syncCustomInput(root);
+          }
+
+          const refresh = root.querySelector("#set-models-refresh");
+          if (refresh) refresh.addEventListener("click", () => loadModels(root, draft, { statusEl, button: refresh }));
+          const test = root.querySelector("#set-test");
+          if (test) test.addEventListener("click", () => testConnection(root, draft, { statusEl, button: test }));
+        };
+
+        const wireGrid = () => {
+          grid.querySelectorAll("[data-provider]").forEach((button) => {
+            button.addEventListener("click", () => {
+              if (draft.provider === button.dataset.provider) return;
+              capture();
+              draft.provider = button.dataset.provider;
+              grid.innerHTML = PROVIDER_ORDER.map((id) => providerCard(id, draft)).join("");
+              repaintPanel();
+              wireGrid();
+            });
+          });
+        };
+
+        wirePanel();
+        wireGrid();
 
         root.querySelector("[data-clear-all]").addEventListener("click", () => {
           closeModal();
           openModal({
             title: "Delete all data?",
-            body: `<p>This removes every class, kit, resource, generated document and question from this browser. Export a backup first if you need one.</p>`,
+            body: `<p>This removes every class, kit, resource, guide, saved attempt and setting stored in this browser. Export a backup first if you need one.</p>`,
             confirmLabel: "Delete everything",
             danger: true,
             onConfirm: () => {
@@ -1945,32 +2143,139 @@
               docViewId = null;
               location.hash = "#/";
               store.load();
+              renderProviderBadge();
               toast("All local data deleted.", "success");
             },
           });
         });
       },
       onConfirm: (root) => {
+        const info = StudyForge.ai.providers()[draft.provider];
+        const key = root.querySelector("#set-key");
+        if (key) draft.keys[draft.provider] = key.value.trim();
+        const base = root.querySelector("#set-base");
+        if (base) draft.baseUrl = base.value.trim();
         const model = readModelField(root);
-        if (!model) {
-          const input = root.querySelector("#set-model-custom");
-          if (input) {
-            input.hidden = false;
-            input.focus();
-          }
-          toast("Enter a model id, or pick one from the list.", "error");
+        if (model) draft.models[draft.provider] = model;
+
+        if (info.kind !== "local" && info.needsKey && !draft.keys[draft.provider]) {
+          toast(`Paste your ${info.keyLabel} to use ${info.label}.`, "error");
           return false;
         }
+        if (draft.provider === "custom" && !draft.baseUrl) {
+          toast("Add the endpoint base URL for your custom provider.", "error");
+          return false;
+        }
+
         store.setSettings({
-          apiKey: root.querySelector("#set-key").value,
-          model,
+          provider: draft.provider,
+          providerKeys: draft.keys,
+          baseUrl: draft.baseUrl,
+          apiKey: draft.keys[draft.provider] || "",
+          model: draft.models[draft.provider] || StudyForge.ai.providers()[draft.provider].model || store.getSettings().model,
+          modelByProvider: draft.models,
           ocrLanguage: root.querySelector("#set-lang").value,
           ocrScale: Number(root.querySelector("#set-scale").value),
           flashcardStyle: root.querySelector("#set-cards").value,
         });
-        toast("Settings saved.", "success");
+        renderProviderBadge();
+        toast(
+          draft.provider === "local" ? "Using the on-device engine." : `${info.label} connected.`,
+          "success",
+        );
       },
     });
+  }
+
+  /** Rebuild the model <select> after loading a catalogue. */
+  function fillModelChoices(root, draft) {
+    const select = root.querySelector("#set-model");
+    if (!select) return;
+    const current = draft.models[draft.provider] || StudyForge.ai.providers()[draft.provider].model || "";
+    const choices = modelChoices(draft);
+    select.innerHTML =
+      choices
+        .map(
+          (id) =>
+            `<option value="${esc(id)}" ${id === current ? "selected" : ""}>${esc(id)}${
+              id === StudyForge.ai.providers()[draft.provider].model ? " (recommended)" : ""
+            }</option>`,
+        )
+        .join("") +
+      `<option value="${CUSTOM_MODEL}" ${choices.includes(current) ? "" : "selected"}>Custom model id…</option>`;
+    syncCustomInput(root);
+  }
+
+  function syncCustomInput(root) {
+    const select = root.querySelector("#set-model");
+    const input = root.querySelector("#set-model-custom");
+    if (!select || !input) return;
+    input.hidden = select.value !== CUSTOM_MODEL;
+  }
+
+  function readModelField(root) {
+    const select = root.querySelector("#set-model");
+    const input = root.querySelector("#set-model-custom");
+    if (!select) return "";
+    if (select.value === CUSTOM_MODEL) return input ? input.value.trim() : "";
+    return select.value;
+  }
+
+  async function loadModels(root, draft, { statusEl, button }) {
+    const info = StudyForge.ai.providers()[draft.provider];
+    if (button) button.disabled = true;
+    const status = statusEl();
+    if (status) status.textContent = `Loading models from ${info.label}…`;
+    try {
+      const { models } = await StudyForge.ai.listModels({
+        apiKey: draft.keys[draft.provider],
+        baseUrl: draft.baseUrl,
+      });
+      draft.catalogue[draft.provider] = models.map((model) => model.id);
+      fillModelChoices(root, draft);
+      if (status) {
+        status.textContent = models.length
+          ? `${models.length} model(s) available.`
+          : "No models were returned — type a model id instead.";
+      }
+    } catch (error) {
+      if (status) status.textContent = StudyForge.ai.describeError(error);
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  async function testConnection(root, draft, { statusEl, button }) {
+    const info = StudyForge.ai.providers()[draft.provider];
+    const status = statusEl();
+    if (!info || info.kind === "local") {
+      if (status) status.textContent = "The on-device engine needs no connection.";
+      return;
+    }
+    const key = draft.keys[draft.provider];
+    if (info.needsKey && !key) {
+      if (status) status.textContent = "Add a key first.";
+      return;
+    }
+    if (button) button.disabled = true;
+    if (status) status.textContent = `Asking ${info.label} for a quick reply…`;
+    try {
+      const { content } = await StudyForge.ai.chat({
+        apiKey: key,
+        baseUrl: draft.baseUrl,
+        model: draft.models[draft.provider] || "",
+        prompt: "Reply with exactly: OK",
+        maxTokens: 16,
+        temperature: 0,
+      });
+      if (status) status.textContent = `Connected ✓ (${content.slice(0, 40)})`;
+      toast(`${info.label} is working.`, "success");
+    } catch (error) {
+      if (status) status.textContent = StudyForge.ai.describeError(error);
+      toast(StudyForge.ai.describeError(error), "error");
+    } finally {
+      if (button) button.disabled = false;
+    }
   }
 
   /* ------------------------------------------------------------------ *
@@ -2024,6 +2329,7 @@
     flashState.index = 0;
     flashState.flipped = false;
     flashState.shuffled = true;
+    flashState.reviewMode = false;
     render();
     toast("Deck shuffled.", "success");
   }
@@ -2075,6 +2381,8 @@
       results: {},
       startedAt: Date.now(),
       attempt: null,
+      items: null,
+      retry: false,
     };
     render();
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -2102,7 +2410,7 @@
     if (quizState.status !== "running" || quizState.phase === "marking") return;
     const kit = store.getKit(quizState.kitId);
     if (!kit || !kit.quiz) return;
-    const items = kit.quiz.items;
+    const items = activeQuizItems(kit);
     const index = Math.min(quizState.index, items.length - 1);
     const item = items[index];
 
@@ -2158,7 +2466,8 @@
   function finishQuiz() {
     const kit = store.getKit(quizState.kitId);
     if (!kit || !kit.quiz) return;
-    const items = kit.quiz.items;
+    const items = activeQuizItems(kit);
+    quizState.attemptItems = items;
     const answers = items.map((item, index) => {
       const result = quizState.results[index] || {};
       const given = quizState.answers[index] || {};
@@ -2542,6 +2851,17 @@
       case "new-kit":
         openNewKit();
         break;
+      case "open-settings":
+        openSettings();
+        break;
+      case "load-demo": {
+        const demo = createDemoKit();
+        if (demo) {
+          toast("Sample kit ready — open the Quiz or Flashcards tab.", "success");
+          navigate(`#/kit/${demo.kit.id}`);
+        }
+        break;
+      }
       case "open-kit":
         navigate(`#/kit/${id}`);
         break;
@@ -2704,6 +3024,15 @@
       case "card-again":
         markCard("again");
         break;
+      case "review-again": {
+        flashState.reviewMode = true;
+        flashState.index = 0;
+        flashState.flipped = false;
+        flashState.showList = false;
+        render();
+        toast("Reviewing the cards you are still learning.");
+        break;
+      }
       case "shuffle-cards":
         shuffleDeck();
         break;
@@ -2776,9 +3105,43 @@
         docViewId = id;
         render();
         break;
+      case "toc-jump": {
+        const body = els.view.querySelector("[data-doc-body]");
+        const index = Number(actionEl.dataset.index);
+        const target = body ? body.querySelectorAll("h1, h2, h3")[index] : null;
+        if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+        break;
+      }
+      case "practise-missed": {
+        const kit = store.getKit(quizState.kitId || route.id);
+        const attempt = quizState.attempt;
+        if (!kit || !attempt) break;
+        const missed = attempt.answers
+          .map((answer, index) => ({ answer, item: kit.quiz.items[index] }))
+          .filter((entry) => !entry.answer.correct && entry.item);
+        if (!missed.length) {
+          toast("Nothing to redo — every question was correct.", "success");
+          break;
+        }
+        quizState = {
+          kitId: kit.id,
+          status: "running",
+          index: 0,
+          phase: "answering",
+          answers: {},
+          results: {},
+          startedAt: Date.now(),
+          attempt: null,
+          items: missed.map((entry) => entry.item),
+          retry: true,
+        };
+        render();
+        toast(`${plural(missed.length, "question")} to retry.`);
+        break;
+      }
       case "start-quiz":
       case "retry-quiz": {
-        startQuiz(id);
+        startQuiz(id || quizState.kitId);
         break;
       }
       case "quiz-choose": {
@@ -2870,6 +3233,9 @@
     els.view.addEventListener("dragleave", onDragLeave);
     els.view.addEventListener("drop", onDrop);
     els.nav.addEventListener("click", onClick);
+    // The engine chip lives in the topbar, outside the view and nav containers.
+    const providerSlot = $("provider-slot");
+    if (providerSlot) providerSlot.addEventListener("click", onClick);
 
     els.search.addEventListener("input", () => {
       query = els.search.value.trim();
@@ -3012,6 +3378,32 @@
         if (event.key === "ArrowLeft") {
           event.preventDefault();
           moveCard(-1);
+          return;
+        }
+      }
+      // Quiz: number keys choose an option, Enter marks and advances.
+      if (
+        route.name === "kit" &&
+        route.tab === "questions" &&
+        quizState.status === "running" &&
+        !typing &&
+        els.modalRoot.hidden
+      ) {
+        if (/^[1-9]$/.test(event.key)) {
+          const options = els.view.querySelectorAll('[data-action="quiz-choose"]');
+          const index = Number(event.key) - 1;
+          if (options[index]) {
+            event.preventDefault();
+            options[index].click();
+          }
+          return;
+        }
+        if (event.key === "Enter") {
+          const next = els.view.querySelector('[data-action="quiz-next"]');
+          if (next && !next.disabled) {
+            event.preventDefault();
+            next.click();
+          }
           return;
         }
       }

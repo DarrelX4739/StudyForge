@@ -168,12 +168,44 @@
     }
   }
 
+  /** True when the on-device engine should do the work (no AI provider set). */
+  function isLocal() {
+    return !StudyForge.ai.isAiEnabled();
+  }
+
+  /** The key for the active provider; only called on the AI path. */
   function requireKey() {
-    const key = StudyForge.store.getApiKey();
+    const key = StudyForge.store.getProviderKey();
     if (!key) {
-      throw new Error("Add your NVIDIA NIM API key in Settings before processing resources.");
+      throw new Error("Add your API key in Settings, or switch to the on-device engine.");
     }
     return key;
+  }
+
+  /**
+   * Build a study document on device. Kept in one place so the PDF and text
+   * pipelines behave identically.
+   */
+  function localDocument({ text, title, subject }) {
+    return StudyForge.local.buildStudyDocument({ name: title, subject, text });
+  }
+
+  /** Shared shape for locally generated question/card sets. */
+  function localAllocation(kit, target) {
+    const ai = StudyForge.ai;
+    const ready = StudyForge.store
+      .resourcesInKit(kit.id)
+      .filter((resource) => resource.document && resource.document.trim());
+    if (!ready.length) {
+      throw new Error(
+        "This study kit has no study guides yet. Add a resource and let it finish processing first.",
+      );
+    }
+    const allocation = ai.planQuizAllocation(
+      ready.map((resource) => ({ id: resource.id, name: resource.name, length: resource.document.length })),
+      target,
+    );
+    return { ready, allocation, byId: new Map(ready.map((resource) => [resource.id, resource])) };
   }
 
   async function runPdfJob(job) {
@@ -181,7 +213,8 @@
     const ai = StudyForge.ai;
     const ocr = StudyForge.ocr;
     const settings = store.getSettings();
-    const apiKey = requireKey();
+    const local = isLocal();
+    const apiKey = local ? "" : requireKey();
     const file = job.file || sessionFiles.get(job.resourceId);
 
     if (!file) {
@@ -218,13 +251,17 @@
       });
 
       progress(job, { step: "Checking whether any pages are missing text…", progress: 16 });
-      const gap = await ai.analyseGaps({
-        apiKey,
-        pages: extracted.pages,
-        total,
-        signal: job.controller.signal,
-        onProgress: (message) => progress(job, { step: message, progress: 20 }),
-      });
+      // Gap analysis uses the model for a careful audit; on device we fall back
+      // to the local heuristic, which still catches empty and very short pages.
+      const gap = local
+        ? { pages: ai.heuristicOcrPages(extracted.pages, total), remaining: [], notes: "Checked on device." }
+        : await ai.analyseGaps({
+            apiKey,
+            pages: extracted.pages,
+            total,
+            signal: job.controller.signal,
+            onProgress: (message) => progress(job, { step: message, progress: 20 }),
+          });
 
       const ocrText = new Map();
       if (gap.pages.length) {
@@ -280,21 +317,29 @@
       }
 
       progress(job, { step: "Writing the study document…", progress: 78 });
-      const document = await ai.generateDocument({
-        apiKey,
-        text: merged,
-        meta: {
-          title: job.resourceName,
-          subject: job.subject,
-          sourceType: "pdf",
-        },
-        signal: job.controller.signal,
-        onProgress: ({ message }) => progress(job, { step: message, progress: 80 }),
-      });
+      let markdown;
+      let truncatedParts = [];
+      if (local) {
+        markdown = localDocument({ text: merged, title: job.resourceName, subject: job.subject });
+      } else {
+        const document = await ai.generateDocument({
+          apiKey,
+          text: merged,
+          meta: {
+            title: job.resourceName,
+            subject: job.subject,
+            sourceType: "pdf",
+          },
+          signal: job.controller.signal,
+          onProgress: ({ message }) => progress(job, { step: message, progress: 80 }),
+        });
+        markdown = document.markdown;
+        truncatedParts = document.truncatedParts || [];
+      }
 
-      let statusMessage = `Document ready — ${total} page(s), ${ocrText.size} OCR'd.`;
-      if (document.truncatedParts.length) {
-        statusMessage += ` Part(s) ${document.truncatedParts.join(", ")} hit the output limit and may be short.`;
+      let statusMessage = `Study guide ready — ${total} page(s), ${ocrText.size} OCR'd.`;
+      if (truncatedParts.length) {
+        statusMessage += ` Part(s) ${truncatedParts.join(", ")} hit the output limit and may be short.`;
       }
       if (gap.remaining && gap.remaining.length) {
         statusMessage += ` ${gap.remaining.length} flagged page(s) were skipped (${ai.MAX_OCR_PAGES}-page OCR limit).`;
@@ -304,11 +349,11 @@
         status: "ready",
         statusMessage,
         error: "",
-        document: document.markdown,
+        document: markdown,
         documentUpdatedAt: new Date().toISOString(),
       });
 
-      progress(job, { step: "Study document ready.", progress: 100 });
+      progress(job, { step: "Study guide ready.", progress: 100 });
     } finally {
       if (pdf) {
         try {
@@ -322,7 +367,8 @@
 
   async function runTextJob(job) {
     const store = StudyForge.store;
-    const apiKey = requireKey();
+    const local = isLocal();
+    const apiKey = local ? "" : requireKey();
     const text = job.text || "";
 
     if (!text.trim()) throw new Error("There is no text to process.");
@@ -334,26 +380,36 @@
     });
     progress(job, { step: "Writing the study document…", progress: 10 });
 
-    const document = await StudyForge.ai.generateDocument({
-      apiKey,
-      text,
-      meta: {
-        title: job.resourceName,
-        subject: job.subject,
-        sourceType: "text",
-      },
-      signal: job.controller.signal,
-      onProgress: ({ message, part, total }) => {
-        progress(job, {
-          step: message,
-          progress: total > 1 ? 10 + (part / total) * 85 : 50,
-        });
-      },
-    });
+    let markdown;
+    let truncatedParts = [];
+    if (local) {
+      progress(job, { step: "Reading the notes and finding key terms…", progress: 35 });
+      markdown = localDocument({ text, title: job.resourceName, subject: job.subject });
+      progress(job, { step: "Assembling the study guide…", progress: 85 });
+    } else {
+      const document = await StudyForge.ai.generateDocument({
+        apiKey,
+        text,
+        meta: {
+          title: job.resourceName,
+          subject: job.subject,
+          sourceType: "text",
+        },
+        signal: job.controller.signal,
+        onProgress: ({ message, part, total }) => {
+          progress(job, {
+            step: message,
+            progress: total > 1 ? 10 + (part / total) * 85 : 50,
+          });
+        },
+      });
+      markdown = document.markdown;
+      truncatedParts = document.truncatedParts || [];
+    }
 
-    let statusMessage = "Document ready.";
-    if (document.truncatedParts.length) {
-      statusMessage += ` Part(s) ${document.truncatedParts.join(", ")} hit the output limit and may be short.`;
+    let statusMessage = local ? "Study guide ready (built on device)." : "Study guide ready.";
+    if (truncatedParts.length) {
+      statusMessage += ` Part(s) ${truncatedParts.join(", ")} hit the output limit and may be short.`;
     }
 
     store.updateResource(job.resourceId, {
@@ -361,11 +417,11 @@
       statusMessage,
       error: "",
       pages: { total: 0, textPages: 0, ocrPages: [], gapNotes: "Restructured from pasted text." },
-      document: document.markdown,
+      document: markdown,
       documentUpdatedAt: new Date().toISOString(),
     });
 
-    progress(job, { step: "Study document ready.", progress: 100 });
+    progress(job, { step: "Study guide ready.", progress: 100 });
   }
 
   /**
@@ -483,11 +539,184 @@
       : `The model did not return usable ${what}. Try again or add more content to this kit.`;
   }
 
+  /* ------------------------------------------------------------------ *
+   * On-device generation (no API key)
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Run a generator over each resource's study guide, honouring the same
+   * per-resource allocation the AI path uses, and collect coverage/failures.
+   */
+  async function localAcrossResources(job, target, generateOne, { step }) {
+    const kit = StudyForge.store.getKit(job.kitId);
+    if (!kit) throw new Error("That study kit no longer exists.");
+    const { ready, allocation, byId } = localAllocation(kit, target);
+    const coverage = allocation.map((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      requested: entry.quota,
+      produced: 0,
+    }));
+    const failures = [];
+    const groups = [];
+
+    for (let index = 0; index < allocation.length; index += 1) {
+      const entry = allocation[index];
+      const resource = byId.get(entry.id);
+      if (job.controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
+      progress(job, {
+        step: step(entry, index, allocation.length),
+        progress: 10 + (index / allocation.length) * 80,
+      });
+      // Let the UI paint between resources on long kits.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      try {
+        const items = generateOne(resource, entry.quota);
+        const covered = coverage.find((item) => item.id === entry.id);
+        if (covered) covered.produced += items.length;
+        if (items.length) groups.push(items);
+      } catch (error) {
+        failures.push({ name: resource.name, message: error.message || String(error) });
+      }
+    }
+
+    return { kit, ready, groups, coverage, failures };
+  }
+
+  async function runLocalQuizJob(job) {
+    const ai = StudyForge.ai;
+    const local = StudyForge.local;
+    const target = Math.max(1, Math.min(job.count || 10, 25));
+
+    progress(job, { step: `Reading the study guides for ${target} question(s)…`, progress: 5 });
+
+    const { kit, ready, groups, coverage, failures } = await localAcrossResources(
+      job,
+      target,
+      (resource, quota) =>
+        local.buildQuestions({
+          text: resource.document,
+          count: quota,
+          style: job.difficulty === "exam" ? "exam" : "",
+          sourceName: resource.name,
+        }),
+      { step: (entry, index, total) => `Writing questions from “${entry.name}” (${index + 1}/${total})…` },
+    );
+
+    const questions = mergeGroups(groups, { dedupe: ai.dedupeQuestions }).slice(0, target);
+    if (!questions.length) {
+      throw new Error(
+        failures.length
+          ? `Could not build questions: ${failures[0].message}`
+          : "Could not build questions from these guides. Try adding richer notes.",
+      );
+    }
+
+    StudyForge.store.setKitQuiz(kit.id, {
+      generatedAt: new Date().toISOString(),
+      items: questions,
+      sourceCount: ready.length,
+      sourceNames: ready.map((resource) => resource.name),
+      coverage,
+      failures,
+      truncated: false,
+      engine: "local",
+    });
+    progress(job, { step: `${questions.length} question(s) ready.`, progress: 100 });
+  }
+
+  async function runLocalFlashcardJob(job) {
+    const ai = StudyForge.ai;
+    const local = StudyForge.local;
+    const target = Math.max(1, Math.min(job.count || 20, 40));
+    const style =
+      job.style === "question" || job.style === "vocab"
+        ? job.style
+        : StudyForge.store.getSettings().flashcardStyle || "vocab";
+
+    progress(job, { step: `Reading the study guides for ${target} card(s)…`, progress: 5 });
+
+    const { kit, ready, groups, coverage, failures } = await localAcrossResources(
+      job,
+      target,
+      (resource, quota) =>
+        local.buildFlashcards({ text: resource.document, count: quota, style }).map((card) => ({
+          ...card,
+          source: resource.name,
+        })),
+      { step: (entry, index, total) => `Writing cards from “${entry.name}” (${index + 1}/${total})…` },
+    );
+
+    const cards = mergeGroups(groups, { dedupe: ai.dedupeFlashcards }).slice(0, target);
+    if (!cards.length) {
+      throw new Error(
+        failures.length
+          ? `Could not build flashcards: ${failures[0].message}`
+          : "Could not build flashcards from these guides.",
+      );
+    }
+
+    StudyForge.store.setKitFlashcards(kit.id, {
+      generatedAt: new Date().toISOString(),
+      items: cards,
+      style,
+      engine: "local",
+      sourceCount: ready.length,
+      sourceNames: ready.map((resource) => resource.name),
+      coverage,
+      failures,
+    });
+    progress(job, { step: `${cards.length} flashcard(s) ready.`, progress: 100 });
+  }
+
+  async function runLocalExamJob(job) {
+    const ai = StudyForge.ai;
+    const local = StudyForge.local;
+    const target = Math.max(1, Math.min(job.count || 20, 40));
+
+    progress(job, { step: `Reading the study guides for a ${target}-question paper…`, progress: 5 });
+
+    const { kit, ready, groups, coverage, failures } = await localAcrossResources(
+      job,
+      target,
+      (resource, quota) => local.buildExam({ text: resource.document, count: quota }),
+      { step: (entry, index, total) => `Writing exam questions from “${entry.name}” (${index + 1}/${total})…` },
+    );
+
+    const questions = mergeGroups(groups, { dedupe: ai.dedupeQuestions })
+      .filter((question) => question.type === "mcq" && question.options.length >= 2)
+      .slice(0, target);
+    if (!questions.length) {
+      throw new Error(
+        failures.length
+          ? `Could not build the paper: ${failures[0].message}`
+          : "Could not build enough multiple-choice questions. Add notes with more definitions.",
+      );
+    }
+
+    const minutes = job.durationMinutes
+      ? Math.min(180, Math.max(1, Math.round(job.durationMinutes)))
+      : Math.max(5, Math.round((questions.length * 1.2) / 5) * 5);
+
+    StudyForge.store.setKitExam(kit.id, {
+      generatedAt: new Date().toISOString(),
+      items: questions,
+      durationMinutes: minutes,
+      engine: "local",
+      sourceCount: ready.length,
+      sourceNames: ready.map((resource) => resource.name),
+      coverage,
+      failures,
+    });
+    progress(job, { step: `${questions.length}-question paper ready · ${minutes} minutes.`, progress: 100 });
+  }
+
   /**
    * Practice questions for a whole kit: allocated per resource, merged,
    * de-duplicated and interleaved.
    */
   async function runQuizJob(job) {
+    if (isLocal()) return runLocalQuizJob(job);
     const ai = StudyForge.ai;
     const target = Math.max(1, Math.min(job.count || 10, 25));
 
@@ -533,6 +762,7 @@
 
   /** Flashcards for a whole kit, allocated per resource like the questions. */
   async function runFlashcardJob(job) {
+    if (isLocal()) return runLocalFlashcardJob(job);
     const ai = StudyForge.ai;
     const target = Math.max(1, Math.min(job.count || 20, 40));
     // Deck style: vocab/concept cards or exam-style questions.
@@ -570,6 +800,7 @@
       generatedAt: new Date().toISOString(),
       items: cards,
       style,
+      engine: "ai",
       sourceCount: ready.length,
       sourceNames: ready.map((resource) => resource.name),
       coverage,
@@ -586,6 +817,7 @@
 
   /** A timed practice exam: multiple choice, allocated per resource. */
   async function runExamJob(job) {
+    if (isLocal()) return runLocalExamJob(job);
     const ai = StudyForge.ai;
     const target = Math.max(1, Math.min(job.count || 20, 40));
 
@@ -620,6 +852,7 @@
       generatedAt: new Date().toISOString(),
       items: questions,
       durationMinutes: minutes,
+      engine: "local",
       sourceCount: ready.length,
       sourceNames: ready.map((resource) => resource.name),
       coverage,

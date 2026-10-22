@@ -35,6 +35,11 @@
   const FLASHCARD_STYLES = ["vocab", "question"];
   const DEFAULT_FLASHCARD_STYLE = "vocab";
 
+  // Where generation happens. "local" needs no key and no network; the others
+  // are optional upgrades. Keep in sync with PROVIDERS in src/ai.js.
+  const PROVIDERS = ["local", "gemini", "openrouter", "nvidia", "custom"];
+  const DEFAULT_PROVIDER = "local";
+
   function blankState() {
     return {
       version: VERSION,
@@ -42,8 +47,13 @@
       kits: [],
       resources: [],
       settings: {
+        provider: DEFAULT_PROVIDER,
+        // One key per provider, so switching back and forth never loses one.
+        providerKeys: { gemini: "", openrouter: "", nvidia: "", custom: "" },
         apiKey: "",
+        baseUrl: "",
         model: DEFAULT_MODEL,
+        modelByProvider: {},
         ocrLanguage: "eng",
         ocrScale: 2,
         flashcardStyle: DEFAULT_FLASHCARD_STYLE,
@@ -121,8 +131,31 @@
     }
 
     const settings = raw.settings && typeof raw.settings === "object" ? raw.settings : {};
+    const rawKeys = settings.providerKeys && typeof settings.providerKeys === "object" ? settings.providerKeys : {};
+    const providerKeys = {
+      gemini: str(rawKeys.gemini),
+      openrouter: str(rawKeys.openrouter),
+      nvidia: str(rawKeys.nvidia),
+      custom: str(rawKeys.custom),
+    };
+    // Older saves kept a single key, which was always an NVIDIA key.
+    const legacyKey = str(settings.apiKey);
+    if (!providerKeys.nvidia && legacyKey) providerKeys.nvidia = legacyKey;
+
     next.settings = {
-      apiKey: str(settings.apiKey),
+      // Existing installs with a key keep using NVIDIA; new installs start local.
+      provider: PROVIDERS.includes(settings.provider)
+        ? settings.provider
+        : legacyKey || providerKeys.nvidia
+          ? "nvidia"
+          : DEFAULT_PROVIDER,
+      providerKeys,
+      apiKey: providerKeys.nvidia || legacyKey,
+      baseUrl: str(settings.baseUrl),
+      modelByProvider:
+        settings.modelByProvider && typeof settings.modelByProvider === "object"
+          ? { ...settings.modelByProvider }
+          : {},
       model: str(settings.model).trim() || DEFAULT_MODEL,
       ocrLanguage: OCR_LANGUAGES.includes(settings.ocrLanguage) ? settings.ocrLanguage : "eng",
       ocrScale: clampScale(settings.ocrScale),
@@ -195,6 +228,7 @@
       // Which style of deck this is, so the player can label the card face and
       // a regeneration can default to the same style.
       style: FLASHCARD_STYLES.includes(raw.style) ? raw.style : DEFAULT_FLASHCARD_STYLE,
+      engine: raw.engine === "local" ? "local" : "ai",
       sourceCount: Number.isFinite(raw.sourceCount) ? raw.sourceCount : 0,
       sourceNames: normaliseSources(raw.sourceNames),
       coverage: normaliseCoverage(raw.coverage),
@@ -227,6 +261,7 @@
       generatedAt: str(raw.generatedAt),
       items: choices,
       durationMinutes: Number.isFinite(minutes) ? Math.min(180, Math.max(1, Math.round(minutes))) : 15,
+      engine: raw.engine === "local" ? "local" : "ai",
       sourceCount: Number.isFinite(raw.sourceCount) ? raw.sourceCount : 0,
       sourceNames: normaliseSources(raw.sourceNames),
       coverage: normaliseCoverage(raw.coverage),
@@ -287,6 +322,8 @@
       coverage: normaliseCoverage(raw.coverage),
       failures: normaliseFailures(raw.failures),
       truncated: raw.truncated === true,
+      // "local" when the on-device engine wrote the set, "ai" otherwise.
+      engine: raw.engine === "local" ? "local" : "ai",
       // Newest first, so the history list needs no extra sorting.
       attempts: arr(raw.attempts)
         .map(normaliseQuizAttempt)
@@ -572,7 +609,28 @@
   }
 
   function setSettings(patch = {}) {
-    if ("apiKey" in patch) state.settings.apiKey = str(patch.apiKey).trim();
+    if (patch.providerKeys && typeof patch.providerKeys === "object") {
+      for (const id of ["gemini", "openrouter", "nvidia", "custom"]) {
+        if (id in patch.providerKeys) state.settings.providerKeys[id] = str(patch.providerKeys[id]).trim();
+      }
+    }
+    // Provider first: a patch that sets both should store the key on the new
+    // provider, not on the old one.
+    if ("provider" in patch) {
+      state.settings.provider = PROVIDERS.includes(patch.provider) ? patch.provider : DEFAULT_PROVIDER;
+      if (state.settings.provider !== "local") {
+        state.settings.apiKey = state.settings.providerKeys[state.settings.provider] || "";
+      }
+    }
+    if ("apiKey" in patch) {
+      state.settings.apiKey = str(patch.apiKey).trim();
+      const provider = state.settings.provider;
+      if (provider && provider !== "local") state.settings.providerKeys[provider] = state.settings.apiKey;
+    }
+    if ("baseUrl" in patch) state.settings.baseUrl = str(patch.baseUrl).trim();
+    if ("modelByProvider" in patch && patch.modelByProvider && typeof patch.modelByProvider === "object") {
+      state.settings.modelByProvider = { ...patch.modelByProvider };
+    }
     if ("model" in patch) state.settings.model = str(patch.model).trim() || DEFAULT_MODEL;
     if ("ocrLanguage" in patch) {
       state.settings.ocrLanguage = OCR_LANGUAGES.includes(patch.ocrLanguage) ? patch.ocrLanguage : "eng";
@@ -589,6 +647,13 @@
 
   const getSettings = () => ({ ...state.settings });
   const getApiKey = () => state.settings.apiKey || "";
+  const getProvider = () => state.settings.provider || DEFAULT_PROVIDER;
+  /** The key for the active provider (falls back to the stored provider key). */
+  const getProviderKey = () => {
+    const provider = state.settings.provider || DEFAULT_PROVIDER;
+    if (provider === "local") return "";
+    return (state.settings.providerKeys && state.settings.providerKeys[provider]) || state.settings.apiKey || "";
+  };
 
   /* ------------------------------------------------------------------ *
    * Backup / restore / storage stats
@@ -691,6 +756,10 @@
     FLASHCARD_STYLES,
     DEFAULT_FLASHCARD_STYLE,
     getApiKey,
+    getProvider,
+    getProviderKey,
+    PROVIDERS,
+    DEFAULT_PROVIDER,
     exportData,
     importData,
     storageBytes,
