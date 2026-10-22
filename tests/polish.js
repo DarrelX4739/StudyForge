@@ -372,6 +372,20 @@ const modal = () => window.document.getElementById("modal-root");
     check("printed quiz includes an answer key", Boolean(sheet) && /Answer key/.test(sheet.textContent));
   }
 
+  // ---------- quick recall answers ----------
+  window.location.hash = `#/kit/${kit.id}/documents`;
+  await wait(180);
+  const recallAnswers = view().querySelectorAll(".doc-answer");
+  check("quick-recall answers start hidden", recallAnswers.length > 0, `${recallAnswers.length} answers`);
+  const revealBtn = view().querySelector(".reveal-answer");
+  check("each hidden answer has a reveal button", Boolean(revealBtn));
+  if (revealBtn && recallAnswers[0]) {
+    revealBtn.click();
+    await wait(80);
+    check("revealing shows the answer", recallAnswers[0].classList.contains("shown"));
+    check("the button switches to Hide", revealBtn.textContent === "Hide answer");
+  }
+
   // ---------- find in guide ----------
   window.location.hash = `#/kit/${kit.id}/documents`;
   await wait(150);

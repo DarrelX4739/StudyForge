@@ -859,6 +859,19 @@
   .backup-nudge{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 12px}
   .backup-nudge .btn{margin-left:auto}
 
+  /* Quick-recall answers stay hidden until asked for */
+  .md .doc-answer{display:none}
+  .md .doc-answer.shown{display:block}
+  .md .reveal-answer{
+    margin:2px 0 10px;padding:4px 10px;border-radius:8px;border:1px solid var(--line);
+    background:transparent;color:var(--muted);font:inherit;font-size:.75rem;font-weight:600;cursor:pointer;
+  }
+  .md .reveal-answer:hover{color:var(--accent);border-color:var(--accent)}
+  @media print{
+    .md .doc-answer{display:block!important}
+    .md .reveal-answer{display:none!important}
+  }
+
   /* Exam countdown strip on the dashboard */
   .exam-strip{display:grid;gap:8px;margin:0 0 12px}
   .exam-strip-item{
@@ -1301,14 +1314,14 @@
       done = true;
       console.warn("[StudyForge] " + reason + "; loading the project files directly.");
       [
-        "./src/store.js?v=2026-10-22t",
-        "./src/local.js?v=2026-10-22t",
-        "./src/markdown.js?v=2026-10-22t",
-        "./src/ocr.js?v=2026-10-22t",
-        "./src/ai.js?v=2026-10-22t",
-        "./src/jobs.js?v=2026-10-22t",
-        "./src/ui.js?v=2026-10-22t",
-        "./src/main.js?v=2026-10-22t",
+        "./src/store.js?v=2026-10-22u",
+        "./src/local.js?v=2026-10-22u",
+        "./src/markdown.js?v=2026-10-22u",
+        "./src/ocr.js?v=2026-10-22u",
+        "./src/ai.js?v=2026-10-22u",
+        "./src/jobs.js?v=2026-10-22u",
+        "./src/ui.js?v=2026-10-22u",
+        "./src/main.js?v=2026-10-22u",
       ].forEach(function (src) {
         var script = document.createElement("script");
         script.src = src;

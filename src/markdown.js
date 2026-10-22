@@ -53,7 +53,15 @@
     };
     const flushList = () => {
       if (!list) return;
-      html.push(`<${list.tag}>${list.items.map((item) => `<li>${inline(item)}</li>`).join("")}</${list.tag}>`);
+      const items = list.items
+        .map((item) => {
+          const children = item.children.length
+            ? `<ul>${item.children.map((child) => `<li>${inline(child)}</li>`).join("")}</ul>`
+            : "";
+          return `<li>${inline(item.text)}${children}</li>`;
+        })
+        .join("");
+      html.push(`<${list.tag}>${items}</${list.tag}>`);
       list = null;
     };
     const flushQuote = () => {
@@ -115,19 +123,28 @@
       }
       flushQuote();
 
-      const bullet = line.match(/^\s*[-*+]\s+(.*)$/);
-      const ordered = line.match(/^\s*\d+[.)]\s+(.*)$/);
+      const bullet = line.match(/^(\s*)[-*+]\s+(.*)$/);
+      const ordered = line.match(/^(\s*)\d+[.)]\s+(.*)$/);
       if (bullet || ordered) {
         flushParagraph();
+        const match = bullet || ordered;
+        const indent = match[1].length;
+        const content = match[2].replace(/^\s+/, "");
+        // Indented bullets nest inside the item above them.
+        if (indent >= 2 && list && list.items.length) {
+          list.items[list.items.length - 1].children.push(content);
+          continue;
+        }
         const tag = bullet ? "ul" : "ol";
         if (list && list.tag !== tag) flushList();
         if (!list) list = { tag, items: [] };
-        list.items.push((bullet || ordered)[1].replace(/^\s+/, ""));
+        list.items.push({ text: content, children: [] });
         continue;
       }
 
-      if (list && /^\s{2,}\S/.test(line)) {
-        list.items[list.items.length - 1] += " " + line.trim();
+      if (list && /^\s{2,}\S/.test(line) && list.items.length) {
+        const last = list.items[list.items.length - 1];
+        last.text += " " + line.trim();
         continue;
       }
 

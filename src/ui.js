@@ -467,10 +467,35 @@
     }
 
     restoreDrafts(snapshot);
+    enhanceDocRecall();
     restoreDocScroll();
     renderSidebar();
     renderStorage();
     renderProviderBadge();
+  }
+
+  /**
+   * The guide's quick-recall answers start hidden, so the section can be used
+   * as a self-test instead of a list you read past.
+   */
+  function enhanceDocRecall() {
+    const body = els.view.querySelector("[data-doc-body]");
+    if (!body) return;
+    body.querySelectorAll("li > ul").forEach((answers) => {
+      if (!/^Answer:/i.test(answers.textContent.trim())) return;
+      if (answers.dataset.recallReady) return;
+      answers.dataset.recallReady = "1";
+      answers.classList.add("doc-answer");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "reveal-answer";
+      button.textContent = "Show answer";
+      button.addEventListener("click", () => {
+        const shown = answers.classList.toggle("shown");
+        button.textContent = shown ? "Hide answer" : "Show answer";
+      });
+      answers.insertAdjacentElement("afterend", button);
+    });
   }
 
   /** Guides remember the reader's place per document. */
