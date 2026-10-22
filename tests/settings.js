@@ -117,6 +117,19 @@ const modal = () => window.document.getElementById("modal-root");
   search.dispatchEvent(new window.Event("input", { bubbles: true }));
   await wait(100);
 
+  // searching from another page jumps back to the library
+  window.location.hash = "#/activity";
+  await wait(160);
+  const awaySearch = $("#search");
+  awaySearch.value = "glucose";
+  awaySearch.dispatchEvent(new window.Event("input", { bubbles: true }));
+  await wait(200);
+  check("searching from the activity page returns to the library", window.location.hash === "#/", window.location.hash);
+  check("the search term is applied", /Cells & Transport/.test(view().textContent));
+  awaySearch.value = "";
+  awaySearch.dispatchEvent(new window.Event("input", { bubbles: true }));
+  await wait(120);
+
   // ---------- theme ----------
   const before = window.document.documentElement.dataset.theme;
   $("#btn-theme").click();

@@ -5841,6 +5841,11 @@ Active transport is the movement of substances against a concentration gradient,
 
     els.search.addEventListener("input", () => {
       query = els.search.value.trim();
+      // Searching means looking at the library, so leave a kit or the activity page.
+      if (query && route.name !== "dashboard") {
+        navigate("#/");
+        return;
+      }
       scheduleRender();
     });
 
