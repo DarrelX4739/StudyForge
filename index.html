@@ -778,6 +778,59 @@
   }
   .doc-toc a:hover{color:var(--accent);border-left-color:var(--accent)}
 
+  .tab-due{
+    margin-left:-2px;font-size:.68rem;font-weight:700;color:var(--accent-ink);
+    background:var(--accent);border-radius:99px;padding:1px 6px;line-height:1.5;
+  }
+
+  /* Quiz insights */
+  .insights{margin-top:16px}
+  .insight-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+  .insight-stat{
+    display:flex;flex-direction:column;gap:2px;padding:12px 14px;border-radius:12px;
+    background:var(--panel-2);border:1px solid var(--line);
+  }
+  .insight-figure{font-size:1.35rem;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1}
+  .spark{width:100%;height:52px;margin:14px 0 4px;overflow:visible}
+  .spark-line{fill:none;stroke:var(--accent);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .spark-area{fill:color-mix(in srgb,var(--accent) 16%,transparent);stroke:none}
+  .spark-dot{fill:var(--panel);stroke:var(--accent);stroke-width:2}
+  .insight-breakdown{display:grid;gap:8px;margin-top:12px}
+  .insight-row{display:grid;grid-template-columns:110px minmax(0,1fr) 96px;gap:10px;align-items:center;font-size:.86rem}
+  .insight-bar{height:8px;border-radius:99px;background:var(--panel-3);overflow:hidden}
+  .insight-bar span{display:block;height:100%;border-radius:99px;background:var(--grad)}
+  .trouble{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+  .trouble h3{font-size:.95rem;margin:0 0 2px}
+  .trouble-list{list-style:none;padding:0;margin:10px 0 12px;display:grid;gap:6px}
+  .trouble-list li{display:flex;gap:10px;justify-content:space-between;font-size:.86rem;line-height:1.4}
+  .trouble-q{flex:1;min-width:0}
+  .trouble-score{
+    flex:0 0 auto;font-size:.75rem;font-weight:640;color:var(--warn);
+    background:var(--warn-soft);border-radius:99px;padding:1px 8px;height:max-content;
+  }
+  .result-delta{margin:2px 0 0;font-size:.84rem;font-weight:600}
+  .result-delta.up{color:var(--good)}
+  .result-delta.down{color:var(--danger)}
+  .result-split{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .split-pill{
+    font-size:.75rem;padding:2px 10px;border-radius:99px;background:var(--panel-2);
+    border:1px solid var(--line);color:var(--muted);
+  }
+  @media (max-width:640px){
+    .insight-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .insight-row{grid-template-columns:1fr;gap:4px}
+    .insight-row .muted{justify-self:start}
+  }
+
+  /* Review schedule text */
+  .deck-plan{margin:6px 0 0;font-size:.78rem;color:var(--muted);text-align:center}
+  .deck-plan strong{color:var(--text);font-weight:640}
+  .fc-scheduled{
+    margin:10px auto 0;text-align:center;font-size:.8rem;color:var(--muted);
+    background:var(--panel-2);border:1px dashed var(--line-2);border-radius:99px;
+    padding:4px 14px;max-width:max-content;
+  }
+
   /* Reading comfort */
   .doc-head-actions{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
   .doc-read-controls{margin-top:0;justify-content:flex-end}
@@ -1054,14 +1107,14 @@
       done = true;
       console.warn("[StudyForge] " + reason + "; loading the project files directly.");
       [
-        "./src/store.js?v=2026-10-22b",
-        "./src/local.js?v=2026-10-22b",
-        "./src/markdown.js?v=2026-10-22b",
-        "./src/ocr.js?v=2026-10-22b",
-        "./src/ai.js?v=2026-10-22b",
-        "./src/jobs.js?v=2026-10-22b",
-        "./src/ui.js?v=2026-10-22b",
-        "./src/main.js?v=2026-10-22b",
+        "./src/store.js?v=2026-10-22c",
+        "./src/local.js?v=2026-10-22c",
+        "./src/markdown.js?v=2026-10-22c",
+        "./src/ocr.js?v=2026-10-22c",
+        "./src/ai.js?v=2026-10-22c",
+        "./src/jobs.js?v=2026-10-22c",
+        "./src/ui.js?v=2026-10-22c",
+        "./src/main.js?v=2026-10-22c",
       ].forEach(function (src) {
         var script = document.createElement("script");
         script.src = src;

@@ -230,9 +230,16 @@
     if (!raw || typeof raw !== "object") return null;
     const state = raw.state === "known" ? "known" : raw.state === "again" ? "again" : "";
     if (!state) return null;
+    const interval = Number(raw.interval);
+    const ease = Number(raw.ease);
     return {
       state,
       reps: Number.isFinite(raw.reps) ? Math.max(0, raw.reps) : 0,
+      // Days until the next review (0 means "come back in minutes").
+      interval: Number.isFinite(interval) ? Math.max(0, Math.min(365, interval)) : 0,
+      // Per-card difficulty multiplier, like SM-2's ease factor.
+      ease: Number.isFinite(ease) ? Math.max(1.3, Math.min(3.2, ease)) : 2.5,
+      lapses: Number.isFinite(raw.lapses) ? Math.max(0, raw.lapses) : 0,
       at: str(raw.at, now()),
       dueAt: str(raw.dueAt, now()),
     };
@@ -340,6 +347,8 @@
       score: Number.isFinite(raw.score) ? Math.max(0, Math.min(1, raw.score)) : 0,
       feedback: str(raw.feedback),
       markedBy: raw.markedBy === "ai" ? "ai" : raw.markedBy === "offline" ? "offline" : "auto",
+      // How long this question took, when it was recorded.
+      seconds: Number.isFinite(raw.seconds) ? Math.max(0, Math.min(3600, raw.seconds)) : 0,
     };
   }
 
@@ -594,6 +603,47 @@
     return out;
   }
 
+  /**
+   * How the deck's reviews are spread out: what is due now, what is coming in
+   * the next week, and when the next card lands.
+   */
+  function deckSchedule(kitId) {
+    const kit = getKit(kitId);
+    const deck = kit && kit.flashcards;
+    if (!deck) return { total: 0, due: 0, later: 0, nextDueAt: null, nextInterval: 0, learning: 0 };
+    const nowMs = Date.now();
+    const week = nowMs + 7 * 24 * 60 * 60 * 1000;
+    let due = 0;
+    let later = 0;
+    let learning = 0;
+    let nextDueAt = null;
+    let nextInterval = 0;
+    const ratings = deck.ratings || {};
+    for (const card of deck.items) {
+      const rating = ratings[String(card.front || "").toLowerCase().replace(/\s+/g, " ").trim()];
+      if (!rating) {
+        due += 1;
+        continue;
+      }
+      const time = new Date(rating.dueAt).getTime();
+      if (rating.state === "again" || time <= nowMs) due += 1;
+      else if (time <= week) later += 1;
+      if (rating.state === "again") learning += 1;
+      if (time > nowMs && (!nextDueAt || time < nextDueAt)) {
+        nextDueAt = time;
+        nextInterval = rating.interval || 0;
+      }
+    }
+    return {
+      total: deck.items.length,
+      due,
+      later,
+      learning,
+      nextDueAt: nextDueAt ? new Date(nextDueAt).toISOString() : null,
+      nextInterval,
+    };
+  }
+
   function touchKit(kitId) {
     const kit = getKit(kitId);
     if (kit) kit.updatedAt = now();
@@ -706,17 +756,34 @@
    * "Got it" spaces reviews out (3 days, then further apart, capped at 30);
    * "Still learning" brings it back in ten minutes.
    */
+  /**
+   * Record how a card went and schedule the next review with a light SM-2:
+   * each success multiplies the interval by the card's ease factor, a lapse
+   * resets it to ten minutes and makes the card a little harder.
+   */
   function rateCard(kitId, cardKey, state) {
     const kit = getKit(kitId);
     if (!kit || !kit.flashcards || !cardKey) return null;
     const key = String(cardKey).toLowerCase().trim();
-    const previous = kit.flashcards.ratings[key] || { reps: 0 };
-    const reps = state === "known" ? Math.min(6, (previous.reps || 0) + 1) : 0;
-    const dueInMs =
-      state === "known" ? Math.min(30, reps * 3) * 24 * 60 * 60 * 1000 : 10 * 60 * 1000;
+    const previous = kit.flashcards.ratings[key] || { reps: 0, interval: 0, ease: 2.5, lapses: 0 };
+    const previousEase = Number.isFinite(previous.ease) ? previous.ease : 2.5;
+    const previousInterval = Number.isFinite(previous.interval) ? previous.interval : 0;
+    const learning = state === "known";
+    const ease = learning
+      ? Math.min(3.2, previousEase + 0.06)
+      : Math.max(1.3, previousEase - 0.22);
+    const interval = learning
+      ? Math.min(60, Math.max(1, Math.round((previousInterval || 1) * ease)))
+      : 0;
+    const reps = learning ? Math.min(20, (previous.reps || 0) + 1) : 0;
+    const lapses = learning ? previous.lapses || 0 : Math.min(20, (previous.lapses || 0) + 1);
+    const dueInMs = interval > 0 ? interval * 24 * 60 * 60 * 1000 : 10 * 60 * 1000;
     const rating = {
-      state: state === "known" ? "known" : "again",
+      state: learning ? "known" : "again",
       reps,
+      interval,
+      ease,
+      lapses,
       at: now(),
       dueAt: new Date(Date.now() + dueInMs).toISOString(),
     };
@@ -920,6 +987,7 @@
     setKitFlashcards,
     rateCard,
     resetCardRatings,
+    deckSchedule,
     recordActivity,
     streakInfo,
     activityDays,

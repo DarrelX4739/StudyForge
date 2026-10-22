@@ -194,6 +194,19 @@ Consequences you will see in the questions tab:
    the history.
 8. **Practise missed** starts a fresh run containing only the questions you got wrong last time.
 
+### Progress analytics (per study kit)
+
+Every attempt feeds a **Your progress** panel above the quiz:
+
+- **Best, average and attempt count**, plus how this attempt compared with the previous one (▲ / ▼ points).
+- **Score trend** as a small sparkline over your recent attempts.
+- **Accuracy split** between multiple choice and short answers, so you can see which format is costing you marks.
+- **Pace**: average seconds per question, with the slowest question shown on the result screen.
+- **Trouble spots** — questions you have missed more than once, worst first, with a one-click
+  **Practise trouble spots** run that contains only those questions.
+
+Practice tests show their own best/average across sittings, and every sitting can be reviewed.
+
 ### Flashcards (per study kit)
 
 A deck of revision cards, written the same way: **allocated per resource**, one request each, then
@@ -388,8 +401,9 @@ npm test
 | `polish` | Every route, answer locking, attempt persistence and review, card scheduling, streaks, shortcuts. |
 | `settings` | Provider switching, per-provider keys, search, theme, sidebar. |
 | `ui-provider` | Provider picker, stubbed Gemini/OpenRouter/custom requests, sample kit, missed-question retry, review mode. |
+| `insights` | Progress analytics across attempts, trouble spots, per-question pace, hardest cards and the review schedule. |
 
-All five suites pass with zero console errors.
+All six suites pass with zero console errors.
 
 ## Limitations
 

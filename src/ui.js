@@ -73,10 +73,20 @@
     answers: {}, // index -> { choice } | { text }
     results: {}, // index -> { correct, score, feedback, markedBy, expected, given }
     startedAt: 0,
+    questionStartedAt: 0,
     attempt: null,
   };
   // Flashcard deck position, kept per kit while the tab is open.
-  let flashState = { kitId: null, index: 0, flipped: false, order: null, known: {}, again: {}, shuffled: false };
+  let flashState = {
+    kitId: null,
+    index: 0,
+    flipped: false,
+    order: null,
+    known: {},
+    again: {},
+    shuffled: false,
+    lastScheduled: null,
+  };
   // Which classes / kits are open in the sidebar tree.
   const sidebarOpen = { classes: new Set(), kits: new Set() };
   let lastSidebarRoute = "";
@@ -191,6 +201,9 @@
       showList: false,
       reviewMode: false,
       dueOnly: false,
+      hardMode: false,
+      hardList: null,
+      lastScheduled: null,
     };
   }
 
@@ -215,6 +228,11 @@
   function deckOrder(kit) {
     const total = kit.flashcards ? kit.flashcards.items.length : 0;
     if (!total) return [];
+    if (flashState.hardMode) {
+      const hardest = flashState.hardList && flashState.hardList.length ? flashState.hardList : hardestCards(kit);
+      if (hardest.length) return hardest;
+      flashState.hardMode = false;
+    }
     if (flashState.reviewMode) {
       const now = Date.now();
       const ratings = (kit.flashcards && kit.flashcards.ratings) || {};
@@ -752,13 +770,19 @@ Active transport is the movement of substances against a concentration gradient,
     if (!state.kits.length || query || filterClassId) return "";
     const { total, best } = dueAcrossKits(state);
     if (!total || !best) return "";
+    const upcoming = state.kits.reduce(
+      (sum, kit) => sum + (kit.flashcards ? (store.deckSchedule(kit.id).later || 0) : 0),
+      0,
+    );
     return `
       <section class="due-panel">
         <div class="due-copy">
           <span class="due-figure">${total}</span>
           <div>
             <strong>${total === 1 ? "card is" : "cards are"} due for review</strong>
-            <p class="muted tiny">Most come from ${esc(best.kit.name)}. A few minutes now keeps everything fresh.</p>
+            <p class="muted tiny">Most come from ${esc(best.kit.name)}.${
+              upcoming ? ` ${upcoming} more come back within a week.` : ""
+            } A few minutes now keeps everything fresh.</p>
           </div>
         </div>
         <button class="btn primary small" data-action="review-all-due" data-id="${esc(best.kit.id)}">Review now</button>
@@ -844,7 +868,7 @@ Active transport is the movement of substances against a concentration gradient,
           <button class="btn" data-action="new-class">New class</button>
           <button class="btn" data-action="load-demo">Try a sample kit</button>
         </div>
-        <p class="tiny muted">The sample kit builds a guide, 12 flashcards and an 8-question quiz on the spot — no key, no setup.</p>
+        <p class="tiny muted">The sample kit builds a guide, a flashcard deck and an 8-question quiz on the spot — no key, no setup.</p>
       </div>`;
   }
 
@@ -903,6 +927,7 @@ Active transport is the movement of substances against a concentration gradient,
         id: "flashcards",
         label: "Flashcards",
         count: kit.flashcards ? kit.flashcards.items.length : 0,
+        due: kit.flashcards ? store.deckSchedule(kit.id).due : 0,
         href: `#/kit/${kit.id}/flashcards`,
       },
       {
@@ -916,7 +941,9 @@ Active transport is the movement of substances against a concentration gradient,
       .map(
         (tab) => `<a role="tab" aria-selected="${tab.id === activeTab}" class="tab ${
           tab.id === activeTab ? "active" : ""
-        }" href="${tab.href}">${esc(tab.label)}<span class="count">${tab.count}</span></a>`,
+        }" href="${tab.href}">${esc(tab.label)}<span class="count">${tab.count}</span>${
+          tab.due ? `<span class="tab-due" title="${tab.due} card(s) to revise">${tab.due}</span>` : ""
+        }</a>`,
       )
       .join("")}</nav>`;
   }
@@ -1154,7 +1181,153 @@ Active transport is the movement of substances against a concentration gradient,
             : ""
         }
         ${quiz && quiz.truncated ? `<div class="notice subtle">The combined documents were long, so a proportional slice of each resource was used.</div>` : ""}
+        ${renderQuizInsights(kit)}
         ${renderKitQuiz(kit)}
+      </section>`;
+  }
+
+  /* ------------------------- progress analytics --------------------- */
+
+  /**
+   * Everything the saved attempts can tell us: score trend, accuracy by
+   * question type, pace, and the questions that keep catching you out.
+   */
+  function quizAnalytics(kit) {
+    const attempts = (kit.quiz && kit.quiz.attempts) || [];
+    if (!attempts.length) return null;
+    const oldestFirst = attempts.slice().reverse();
+    const percents = oldestFirst.map((attempt) => attempt.percent);
+    const latest = percents[percents.length - 1];
+    const previous = percents.length > 1 ? percents[percents.length - 2] : null;
+    return {
+      count: attempts.length,
+      percents,
+      latest,
+      previous,
+      delta: previous === null ? null : latest - previous,
+      best: Math.max(...percents),
+      average: Math.round(percents.reduce((sum, value) => sum + value, 0) / percents.length),
+      byType: attempts.reduce(
+        (acc, attempt) => {
+          for (const answer of attempt.answers) {
+            const type = answer.type === "short" ? "short" : "mcq";
+            acc[type].total += 1;
+            if (answer.correct) acc[type].correct += 1;
+          }
+          return acc;
+        },
+        { mcq: { correct: 0, total: 0 }, short: { correct: 0, total: 0 } },
+      ),
+      pace: (() => {
+        const timed = attempts.flatMap((attempt) => attempt.answers.filter((answer) => answer.seconds > 0));
+        if (!timed.length) return null;
+        return Math.round(timed.reduce((sum, answer) => sum + answer.seconds, 0) / timed.length);
+      })(),
+      trouble: (() => {
+        const seen = new Map();
+        for (const attempt of attempts) {
+          for (const answer of attempt.answers) {
+            const key = String(answer.question || "").toLowerCase().trim();
+            if (!key) continue;
+            const entry = seen.get(key) || { question: answer.question, correct: 0, total: 0, seconds: 0, timed: 0 };
+            entry.total += 1;
+            if (answer.correct) entry.correct += 1;
+            if (answer.seconds) {
+              entry.seconds += answer.seconds;
+              entry.timed += 1;
+            }
+            seen.set(key, entry);
+          }
+        }
+        return [...seen.values()]
+          .filter((entry) => entry.correct < entry.total)
+          .sort((a, b) => a.correct / a.total - b.correct / b.total || b.total - a.total)
+          .slice(0, 5);
+      })(),
+    };
+  }
+
+  /** Tiny SVG line chart of recent scores, newest on the right. */
+  function scoreSparkline(percents) {
+    if (percents.length < 2) return "";
+    const width = 220;
+    const height = 46;
+    const step = width / (percents.length - 1);
+    const points = percents.map((value, index) => [index * step, height - (value / 100) * (height - 6) - 3]);
+    const line = points.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+    const area = `0,${height} ${line} ${width},${height}`;
+    return `
+      <svg class="spark" viewBox="0 0 ${width} ${height}" role="img" aria-label="Score trend over ${percents.length} attempts" preserveAspectRatio="none">
+        <polygon points="${area}" class="spark-area"></polygon>
+        <polyline points="${line}" class="spark-line"></polyline>
+        ${points
+          .map(
+            ([x, y], index) =>
+              `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${index === points.length - 1 ? 3 : 2}" class="spark-dot"></circle>`,
+          )
+          .join("")}
+      </svg>`;
+  }
+
+  function renderQuizInsights(kit) {
+    const stats = quizAnalytics(kit);
+    if (!stats) return "";
+    const typeRow = (label, data) => {
+      if (!data.total) return "";
+      const percent = Math.round((data.correct / data.total) * 100);
+      return `
+        <div class="insight-row">
+          <span>${esc(label)}</span>
+          <span class="insight-bar"><span style="width:${percent}%"></span></span>
+          <span class="muted tiny">${percent}% · ${data.correct}/${data.total}</span>
+        </div>`;
+    };
+    return `
+      <section class="panel insights">
+        <div class="panel-head">
+          <div>
+            <h2>Your progress</h2>
+            <p class="muted tiny">Built from every saved attempt in this kit.</p>
+          </div>
+          ${
+            stats.delta === null
+              ? ""
+              : `<span class="pill ${stats.delta >= 0 ? "good" : "bad"}">${stats.delta >= 0 ? "▲" : "▼"} ${Math.abs(
+                  stats.delta,
+                )} pts vs last</span>`
+          }
+        </div>
+        <div class="insight-grid">
+          <div class="insight-stat"><span class="insight-figure">${stats.best}%</span><span class="muted tiny">Best</span></div>
+          <div class="insight-stat"><span class="insight-figure">${stats.average}%</span><span class="muted tiny">Average</span></div>
+          <div class="insight-stat"><span class="insight-figure">${stats.count}</span><span class="muted tiny">Attempt${stats.count === 1 ? "" : "s"}</span></div>
+          <div class="insight-stat"><span class="insight-figure">${stats.pace ? `${stats.pace}s` : "—"}</span><span class="muted tiny">Per question</span></div>
+        </div>
+        ${scoreSparkline(stats.percents)}
+        <div class="insight-breakdown">
+          ${typeRow("Multiple choice", stats.byType.mcq)}
+          ${typeRow("Short answer", stats.byType.short)}
+        </div>
+        ${
+          stats.trouble.length
+            ? `<div class="trouble">
+                <h3>Trouble spots</h3>
+                <p class="muted tiny">Asked more than once and not yet mastered.</p>
+                <ul class="trouble-list">
+                  ${stats.trouble
+                    .map(
+                      (entry) => `
+                        <li>
+                          <span class="trouble-q">${esc(entry.question)}</span>
+                          <span class="trouble-score">${entry.correct}/${entry.total}</span>
+                        </li>`,
+                    )
+                    .join("")}
+                </ul>
+                <button class="btn small" data-action="practise-weak">Practise trouble spots</button>
+              </div>`
+            : ""
+        }
       </section>`;
   }
 
@@ -1404,6 +1577,38 @@ Active transport is the movement of substances against a concentration gradient,
               attempt.secondsUsed ? ` · ${formatClock(attempt.secondsUsed)}` : ""
             }${shortCount ? ` · ${plural(shortCount, "AI-marked short answer")}` : ""}
           </p>
+          ${(() => {
+            const attempts = (quiz.attempts || []).filter((entry) => entry.id !== attempt.id);
+            const previous = attempts[0];
+            if (!previous) return "";
+            const delta = percent - previous.percent;
+            return `<p class="result-delta ${delta >= 0 ? "up" : "down"}">${
+              delta === 0
+                ? "Same score as last time."
+                : `${delta > 0 ? "▲" : "▼"} ${Math.abs(delta)} points ${delta > 0 ? "better" : "lower"} than last time (${previous.percent}%).`
+            }</p>`;
+          })()}
+          ${(() => {
+            const timed = (attempt.answers || []).filter((entry) => entry.seconds > 0);
+            if (!timed.length) return "";
+            const average = Math.round(timed.reduce((sum, entry) => sum + entry.seconds, 0) / timed.length);
+            const slowest = timed.slice().sort((a, b) => b.seconds - a.seconds)[0];
+            return `<p class="muted tiny">Average ${average}s per question${
+              slowest ? ` · slowest was ${slowest.seconds}s` : ""
+            }.</p>`;
+          })()}
+          <div class="result-split">
+            ${["mcq", "short"]
+              .map((type) => {
+                const rows = attempt.answers.filter((entry) => (entry.type === "short" ? "short" : "mcq") === type);
+                if (!rows.length) return "";
+                const right = rows.filter((entry) => entry.correct).length;
+                return `<span class="split-pill">${type === "mcq" ? "Multiple choice" : "Short answer"} ${right}/${
+                  rows.length
+                }</span>`;
+              })
+              .join("")}
+          </div>
           <div class="row tight">
             <button class="btn primary" data-action="practise-missed" ${attempt.correct === attempt.total ? "disabled" : ""}>Practise missed</button>
             <button class="btn" data-action="retry-quiz">Try again</button>
@@ -1499,9 +1704,39 @@ Active transport is the movement of substances against a concentration gradient,
     return `<p class="muted small">No flashcards yet. Generate a deck and it will be saved with this study kit.</p>`;
   }
 
+  /** "in 3 days", "in 2 hours", "due now" — for review scheduling text. */
+  function dueLabel(dueAt) {
+    const ms = new Date(dueAt).getTime() - Date.now();
+    if (!Number.isFinite(ms) || ms <= 0) return "due now";
+    const minutes = Math.round(ms / 60000);
+    if (minutes < 60) return `in ${minutes} minute${minutes === 1 ? "" : "s"}`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return `in ${hours} hour${hours === 1 ? "" : "s"}`;
+    const days = Math.round(hours / 24);
+    return `in ${days} day${days === 1 ? "" : "s"}`;
+  }
+
   /** Stable progress key for a card: its prompt text, so regeneration keeps it. */
   function cardKey(card) {
     return String(card.front || "").toLowerCase().replace(/\s+/g, " ").trim();
+  }
+
+  /**
+   * The cards this learner keeps getting wrong: most lapses first, then the
+   * lowest ease factor, then anything still "learning".
+   */
+  function hardestCards(kit) {
+    const ratings = (kit.flashcards && kit.flashcards.ratings) || {};
+    return kit.flashcards.items
+      .map((card, index) => ({ card, index, rating: ratings[cardKey(card)] }))
+      .filter((entry) => entry.rating && (entry.rating.lapses > 0 || entry.rating.state === "again"))
+      .sort(
+        (a, b) =>
+          (b.rating.lapses || 0) - (a.rating.lapses || 0) ||
+          (a.rating.ease || 2.5) - (b.rating.ease || 2.5),
+      )
+      .slice(0, 10)
+      .map((entry) => entry.index);
   }
 
   /** Progress for the current deck, derived from the saved ratings. */
@@ -1537,6 +1772,7 @@ Active transport is the movement of substances against a concentration gradient,
     const frontLabel = vocab ? "Term" : "Question";
     const backLabel = vocab ? "Definition" : "Answer";
     const progress = deckProgress(kit);
+    const schedule = store.deckSchedule(kit.id);
     const knownCount = progress.known;
     const againCount = progress.again;
     const percent = Math.round((position / order.length) * 100);
@@ -1552,6 +1788,15 @@ Active transport is the movement of substances against a concentration gradient,
           }</span>
         </div>
         <div class="deck-meter"><span style="width:${percent}%"></span></div>
+        <p class="deck-plan">
+          ${
+            progress.due
+              ? `<strong>${progress.due}</strong> card${progress.due === 1 ? "" : "s"} to revise now`
+              : `<strong>All caught up</strong> — nothing due`
+          }${schedule.later ? ` · ${schedule.later} more in the next week` : ""}${
+            schedule.nextDueAt ? ` · next ${dueLabel(schedule.nextDueAt)}` : ""
+          }
+        </p>
 
         <div class="fc-stage">
           <button class="flashcard ${flashState.flipped ? "is-flipped" : ""}" data-action="flip-card"
@@ -1587,6 +1832,13 @@ Active transport is the movement of substances against a concentration gradient,
           <button class="btn small again" data-action="card-again">Still learning</button>
           <button class="btn small known" data-action="card-known">Got it</button>
         </div>
+        ${
+          flashState.lastScheduled
+            ? `<p class="fc-scheduled">“${esc(flashState.lastScheduled.front)}” comes back ${esc(
+                dueLabel(flashState.lastScheduled.dueAt),
+              )}.</p>`
+            : ""
+        }
 
         <div class="row center tight deck-tools">
           ${
@@ -1597,6 +1849,11 @@ Active transport is the movement of substances against a concentration gradient,
           ${
             againCount
               ? `<button class="btn small ghost" data-action="review-again">Still learning (${againCount})</button>`
+              : ""
+          }
+          ${
+            hardestCards(kit).length
+              ? `<button class="btn small ghost" data-action="review-hardest">Hardest (${hardestCards(kit).length})</button>`
               : ""
           }
           <button class="btn small ghost" data-action="shuffle-cards">Shuffle</button>
@@ -1677,6 +1934,14 @@ Active transport is the movement of substances against a concentration gradient,
           <div><span class="exam-figure">${Math.round((exam.durationMinutes * 60) / exam.items.length)}</span><span class="muted tiny">seconds / question</span></div>
           <div><span class="exam-figure">${attempt ? `${attempt.correct}/${attempt.total}` : "—"}</span><span class="muted tiny">last score</span></div>
         </div>
+        ${(() => {
+          const sittings = exam.attempts || [];
+          if (sittings.length < 2) return "";
+          const percents = sittings.map((entry) => entry.percent);
+          const best = Math.max(...percents);
+          const average = Math.round(percents.reduce((sum, value) => sum + value, 0) / percents.length);
+          return `<p class="muted tiny">Across ${plural(sittings.length, "sitting")}: best ${best}% · average ${average}%.</p>`;
+        })()}
         <div class="notice subtle">
           The clock keeps running if you leave this tab, and the exam submits itself when time is up.
           Only multiple-choice questions are used so the paper can be marked automatically.
@@ -2348,7 +2613,9 @@ Active transport is the movement of substances against a concentration gradient,
           <li class="review-row ${entry.correct ? "ok" : "bad"}">
             <div class="review-head">
               <span class="review-index">${index + 1}</span>
-              <span class="review-q">${esc(entry.question)}</span>
+              <span class="review-q">${esc(entry.question)}${
+                entry.seconds ? ` <span class="muted tiny">· ${entry.seconds}s</span>` : ""
+              }</span>
               <span class="badge ${entry.correct ? "ready" : "error"}">${entry.correct ? "Correct" : "Review"}</span>
             </div>
             <p class="review-line"><span class="review-key">Your answer</span><span>${esc(entry.given || "— not answered —")}</span></p>
@@ -2719,7 +2986,10 @@ Active transport is the movement of substances against a concentration gradient,
     if (!order.length) return;
     const cardIndex = order[flashState.index];
     const card = kit.flashcards.items[cardIndex];
-    if (card) store.rateCard(kit.id, cardKey(card), kind === "known" ? "known" : "again");
+    if (card) {
+      const rating = store.rateCard(kit.id, cardKey(card), kind === "known" ? "known" : "again");
+      if (rating) flashState.lastScheduled = { front: card.front, dueAt: rating.dueAt };
+    }
     if (kind === "known") {
       flashState.known[cardIndex] = true;
       delete flashState.again[cardIndex];
@@ -2752,6 +3022,8 @@ Active transport is the movement of substances against a concentration gradient,
     flashState.shuffled = true;
     flashState.reviewMode = false;
     flashState.dueOnly = false;
+    flashState.hardMode = false;
+    flashState.hardList = null;
     render();
     toast("Deck shuffled.", "success");
   }
@@ -2802,6 +3074,7 @@ Active transport is the movement of substances against a concentration gradient,
       answers: {},
       results: {},
       startedAt: Date.now(),
+      questionStartedAt: Date.now(),
       attempt: null,
       items: null,
       retry: false,
@@ -2842,6 +3115,7 @@ Active transport is the movement of substances against a concentration gradient,
       } else {
         quizState.index = index + 1;
         quizState.phase = "answering";
+        quizState.questionStartedAt = Date.now();
         render();
         window.scrollTo({ top: 0, behavior: "smooth" });
       }
@@ -2880,6 +3154,11 @@ Active transport is the movement of substances against a concentration gradient,
 
     // The user may have left the quiz while the AI was marking.
     if (quizState.kitId !== kit.id || quizState.status !== "running") return;
+    // At least a second: instant answers are still a data point for pace.
+    result.seconds = Math.max(
+      1,
+      Math.min(3600, Math.round((Date.now() - (quizState.questionStartedAt || Date.now())) / 1000)),
+    );
     quizState.results[index] = result;
     quizState.phase = "marked";
     render();
@@ -2907,6 +3186,7 @@ Active transport is the movement of substances against a concentration gradient,
         score: Number.isFinite(result.score) ? result.score : 0,
         feedback: result.feedback || "",
         markedBy: result.markedBy || "auto",
+        seconds: Number.isFinite(result.seconds) ? result.seconds : 0,
       };
     });
     const correct = answers.filter((entry) => entry.correct).length;
@@ -3602,6 +3882,24 @@ Active transport is the movement of substances against a concentration gradient,
         }
         break;
       }
+      case "review-hardest": {
+        const kit = store.getKit(route.id);
+        const hardest = kit ? hardestCards(kit) : [];
+        if (!hardest.length) {
+          toast("No tricky cards yet — rate a few first.", "info");
+          break;
+        }
+        flashState.reviewMode = false;
+        flashState.dueOnly = false;
+        flashState.hardMode = true;
+        flashState.hardList = hardest;
+        flashState.index = 0;
+        flashState.flipped = false;
+        flashState.showList = false;
+        render();
+        toast(`Practising your ${plural(hardest.length, "trickiest card")}.`, "info");
+        break;
+      }
       case "review-due": {
         flashState.reviewMode = true;
         flashState.index = 0;
@@ -3713,6 +4011,34 @@ Active transport is the movement of substances against a concentration gradient,
         if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
         break;
       }
+      case "practise-weak": {
+        const kit = store.getKit(route.id);
+        if (!kit || !kit.quiz) break;
+        const stats = quizAnalytics(kit);
+        const wording = new Set((stats ? stats.trouble : []).map((entry) => String(entry.question).toLowerCase().trim()));
+        const items = kit.quiz.items.filter((item) => wording.has(String(item.question).toLowerCase().trim()));
+        if (!items.length) {
+          toast("No trouble spots to practise yet.", "info");
+          break;
+        }
+        quizState = {
+          kitId: kit.id,
+          status: "running",
+          index: 0,
+          phase: "answering",
+          answers: {},
+          results: {},
+          startedAt: Date.now(),
+          questionStartedAt: Date.now(),
+          attempt: null,
+          items,
+          retry: true,
+        };
+        render();
+        window.scrollTo({ top: 0, behavior: "smooth" });
+        toast(`Practising ${plural(items.length, "trouble spot")}.`, "info");
+        break;
+      }
       case "practise-missed": {
         const kit = store.getKit(quizState.kitId || route.id);
         const attempt = quizState.attempt;
@@ -3732,6 +4058,7 @@ Active transport is the movement of substances against a concentration gradient,
           answers: {},
           results: {},
           startedAt: Date.now(),
+          questionStartedAt: Date.now(),
           attempt: null,
           items: missed.map((entry) => entry.item),
           retry: true,

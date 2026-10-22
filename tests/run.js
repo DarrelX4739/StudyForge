@@ -13,7 +13,7 @@ const path = require("path");
 
 const suites = fs
   .readdirSync(__dirname)
-  .filter((file) => file.endsWith(".js") && file !== "run.js" && file !== "package.json")
+  .filter((file) => file.endsWith(".js") && file !== "run.js")
   .sort();
 
 let failed = 0;
