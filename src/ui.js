@@ -2175,22 +2175,18 @@ Active transport is the movement of substances against a concentration gradient,
     const currentModel = draft.models[draft.provider] || info.model || "";
 
     return `
-      ${
-        true
-          ? `<div class="field">
-              <label for="set-key">${esc(info.keyLabel)}</label>
-              <input id="set-key" type="password" autocomplete="off" spellcheck="false"
-                value="${esc(key)}" placeholder="${esc(info.keyPlaceholder || "")}">
-              <span class="hint">
-                Stored in this browser only. ${
-                  info.keyUrl
-                    ? `<a href="${esc(info.keyUrl)}" target="_blank" rel="noopener">Get a key →</a>`
-                    : ""
-                }
-              </span>
-            </div>`
-          : ""
-      }
+      <div class="field">
+        <label for="set-key">${esc(info.keyLabel)}</label>
+        <input id="set-key" type="password" autocomplete="off" spellcheck="false"
+          value="${esc(key)}" placeholder="${esc(info.keyPlaceholder || "")}">
+        <span class="hint">
+          Stored in this browser only. ${
+            info.keyUrl
+              ? `<a href="${esc(info.keyUrl)}" target="_blank" rel="noopener">Get a key →</a>`
+              : ""
+          }
+        </span>
+      </div>
       ${
         draft.provider === "custom"
           ? `<div class="field">
