@@ -3583,15 +3583,20 @@ Active transport is the movement of substances against a concentration gradient,
         <div class="field"><label for="kit-subject">Subject / focus (optional)</label>
           <input id="kit-subject" type="text" placeholder="e.g. Year 11 Biology, Unit 2"></div>
         <div class="field"><label for="kit-class">Class</label>
-          <select id="kit-class">${classOptions(classId)}</select></div>`,
+          <select id="kit-class">${classOptions(classId)}</select></div>
+        <div class="field"><label for="kit-exam-date">Exam date (optional)</label>
+          <input id="kit-exam-date" type="date">
+          <span class="hint">Gives you a countdown and a daily card pace. You can add it later.</span></div>`,
       onConfirm: (root) => {
         const name = root.querySelector("#kit-name").value.trim();
         if (!name) return false;
+        const examDate = root.querySelector("#kit-exam-date").value;
         const kit = store.addKit({
           name,
           subject: root.querySelector("#kit-subject").value,
           classId: root.querySelector("#kit-class").value || null,
         });
+        if (/^\d{4}-\d{2}-\d{2}$/.test(examDate)) store.updateKit(kit.id, { examDate });
         toast("Study kit created.", "success");
         navigate(`#/kit/${kit.id}`);
       },

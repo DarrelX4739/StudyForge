@@ -64,10 +64,15 @@ Active transport moves substances against a concentration gradient and requires 
   click('[data-action="new-kit"]');
   await wait(80);
   type("#modal-root input", "Cells & Transport");
+  const examDateField = window.document.querySelector("#modal-root #kit-exam-date");
+  check("new kit form asks for an exam date", Boolean(examDateField));
+  const futureDate = new Date(Date.now() + 21 * 86400000).toISOString().slice(0, 10);
+  if (examDateField) examDateField.value = futureDate;
   click("#modal-root [data-confirm]");
   await wait(120);
   const kit = store.get().kits[0];
   check("kit created", Boolean(kit), kit && kit.name);
+  check("exam date saved from the new-kit form", kit && kit.examDate === futureDate, kit && kit.examDate);
 
   // ---------- paste text ----------
   window.location.hash = `#/kit/${kit.id}`;
