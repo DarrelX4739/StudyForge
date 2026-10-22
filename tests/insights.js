@@ -214,6 +214,27 @@ async function playQuiz({ pick = 0 } = {}) {
     check("the sitting is saved", sittings >= 1, `${sittings} sitting(s)`);
   }
 
+  // ---------- exam countdown ----------
+  window.location.hash = `#/kit/${kit.id}/flashcards`;
+  await wait(150);
+  const dateBtn = view().querySelector('[data-action="set-exam-date"]');
+  check("kit offers an exam date", Boolean(dateBtn));
+  if (dateBtn) {
+    dateBtn.click();
+    await wait(150);
+    const input = window.document.querySelector("#modal-root #exam-date");
+    const soon = new Date(Date.now() + 10 * 86400000).toISOString().slice(0, 10);
+    input.value = soon;
+    window.document.querySelector("#modal-root [data-confirm]").click();
+    await wait(200);
+    check("exam date is saved", store.getKit(kit.id).examDate === soon, store.getKit(kit.id).examDate);
+    window.location.hash = "#/";
+    await wait(180);
+    const strip = view().querySelector(".exam-strip");
+    check("dashboard counts down to the exam", Boolean(strip), strip ? strip.textContent.replace(/\s+/g, " ").slice(0, 60) : "");
+    check("countdown shows a daily card pace", /cards a day/.test(strip ? strip.textContent : ""));
+  }
+
   // ---------- week strip ----------
   window.location.hash = "#/";
   await wait(150);

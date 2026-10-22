@@ -113,6 +113,8 @@
         subject: str(item.subject),
         // Free-form notes the learner keeps alongside the kit.
         notes: str(item.notes).slice(0, 20000),
+        // Optional exam date, so the app can count down and pace the reviews.
+        examDate: /^\d{4}-\d{2}-\d{2}$/.test(str(item.examDate)) ? item.examDate : "",
         createdAt: str(item.createdAt, now()),
         updatedAt: str(item.updatedAt, now()),
         quiz: normaliseQuiz(item.quiz),
@@ -531,6 +533,9 @@
     if ("classId" in patch) kit.classId = patch.classId && getClass(patch.classId) ? patch.classId : null;
     if (typeof patch.subject === "string") kit.subject = patch.subject.trim();
     if (typeof patch.notes === "string") kit.notes = patch.notes.slice(0, 20000);
+    if ("examDate" in patch) {
+      kit.examDate = /^\d{4}-\d{2}-\d{2}$/.test(String(patch.examDate)) ? String(patch.examDate) : "";
+    }
     kit.updatedAt = now();
     commit();
     return kit;

@@ -65,6 +65,8 @@ A modern, responsive layout with a grouped sidebar:
 
 - **Engine chip** in the top bar always says where material comes from — *On-device engine*,
   the AI provider name, or *key needed*. Click it to open Settings.
+- **Exam dates**: set one per kit and StudyForge counts down, works out how many cards a day clears
+  the deck twice before the paper, and lists the soonest exams on the dashboard.
 - **Weekly goal** (set in Settings) with a seven-dot week tracker on the dashboard.
 - **Streak strip** on the dashboard shows consecutive study days and a 14-day activity heat strip,
   driven by real actions (guides generated, cards rated, quizzes finished).

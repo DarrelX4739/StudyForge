@@ -835,6 +835,7 @@ Active transport is the movement of substances against a concentration gradient,
       ${renderBackupNudge(state)}
       ${renderDuePanel(state)}
       ${renderWeekStrip(state)}
+      ${renderExamCountdowns(state)}
       ${renderContinueCard(state)}
       ${
         state.kits.length
@@ -1039,6 +1040,34 @@ Active transport is the movement of substances against a concentration gradient,
       </div>`;
   }
 
+  /** Upcoming exam dates across the library, soonest first. */
+  function renderExamCountdowns(state) {
+    if (query) return "";
+    const upcoming = state.kits
+      .map((kit) => ({ kit, when: examCountdown(kit) }))
+      .filter((entry) => entry.when && !entry.when.past)
+      .sort((a, b) => a.when.days - b.when.days)
+      .slice(0, 3);
+    if (!upcoming.length) return "";
+    return `
+      <div class="exam-strip">
+        ${upcoming
+          .map(
+            ({ kit, when }) => `
+          <a class="exam-strip-item" href="#/kit/${esc(kit.id)}/flashcards">
+            <span class="exam-strip-days">${when.days === 0 ? "Today" : `${when.days}d`}</span>
+            <span class="exam-strip-main">
+              <strong>${esc(kit.name)}</strong>
+              <span class="muted tiny">${esc(when.label)}${
+                when.perDay ? ` · ${when.perDay} cards a day` : ""
+              }</span>
+            </span>
+          </a>`,
+          )
+          .join("")}
+      </div>`;
+  }
+
   /** Streak + a two-week heat strip, so momentum is visible at a glance. */
   function renderStreakStrip(state) {
     if (!state.kits.length || query) return "";
@@ -1223,6 +1252,9 @@ Active transport is the movement of substances against a concentration gradient,
         <div class="page-title">
           <p class="eyebrow">${esc(kit.subject || "Study kit")}</p>
           <h1>${esc(kit.name)}</h1>
+          <button class="exam-chip ${examCountdown(kit) ? "set" : ""}" data-action="set-exam-date" data-id="${esc(kit.id)}">
+            ${examCountdown(kit) ? esc(examCountdown(kit).label) : "Set an exam date"}
+          </button>
         </div>
         <div class="row tight">
           <button class="btn primary" data-action="study-now" data-id="${esc(kit.id)}">Study now</button>
@@ -2085,6 +2117,23 @@ Active transport is the movement of substances against a concentration gradient,
     return `<p class="muted small">No flashcards yet. Generate a deck and it will be saved with this study kit.</p>`;
   }
 
+  /**
+   * Days until the kit's exam, with a pace hint: how many cards a day it takes
+   * to have seen every card twice before the paper.
+   */
+  function examCountdown(kit) {
+    if (!kit.examDate) return null;
+    const target = new Date(`${kit.examDate}T23:59:59`);
+    const days = Math.ceil((target.getTime() - Date.now()) / 86400000);
+    if (!Number.isFinite(days)) return null;
+    if (days < 0) return { days, label: `Exam was ${plural(Math.abs(days), "day")} ago`, past: true };
+    const label =
+      days === 0 ? "Exam today" : days === 1 ? "Exam tomorrow" : `Exam in ${days} days`;
+    const total = kit.flashcards ? kit.flashcards.items.length : 0;
+    const perDay = days > 0 && total ? Math.ceil((total * 2) / days) : 0;
+    return { days, label, past: false, perDay, total };
+  }
+
   /** "in 3 days", "in 2 hours", "due now" — for review scheduling text. */
   function dueLabel(dueAt) {
     const ms = new Date(dueAt).getTime() - Date.now();
@@ -2176,6 +2225,10 @@ Active transport is the movement of substances against a concentration gradient,
               : `<strong>All caught up</strong> — nothing due`
           }${schedule.later ? ` · ${schedule.later} more in the next week` : ""}${
             schedule.nextDueAt ? ` · next ${dueLabel(schedule.nextDueAt)}` : ""
+          }${
+            examCountdown(kit) && !examCountdown(kit).past && examCountdown(kit).perDay
+              ? ` · ${examCountdown(kit).perDay} a day clears the deck twice before the exam`
+              : ""
           }
         </p>
 
@@ -4364,6 +4417,30 @@ Active transport is the movement of substances against a concentration gradient,
       case "move-kit":
         openMoveKit(id);
         break;
+      case "set-exam-date": {
+        const kit = store.getKit(id);
+        if (!kit) break;
+        const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+        openModal({
+          title: "Exam date",
+          confirmLabel: "Save date",
+          body: `
+            <div class="field">
+              <label for="exam-date">When is the exam?</label>
+              <input id="exam-date" type="date" value="${esc(kit.examDate || tomorrow)}">
+              <span class="hint">Optional. StudyForge counts down and works out how many cards a day
+                gets you through the deck twice before then.</span>
+            </div>
+            ${kit.examDate ? `<p class="muted tiny">Clear the field to remove the date.</p>` : ""}`,
+          onConfirm: (root) => {
+            const value = root.querySelector("#exam-date").value;
+            store.updateKit(kit.id, { examDate: value || "" });
+            render();
+            toast(value ? "Exam date saved." : "Exam date removed.");
+          },
+        });
+        break;
+      }
       case "edit-kit":
         openEditKit(id);
         break;
